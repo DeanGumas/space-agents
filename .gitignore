@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Build output (PyInstaller)
+build/
+dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
