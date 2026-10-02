@@ -1,0 +1,117 @@
+/* Design tokens. Components use only these variables, never raw colors, so themes stay consistent.
+   The resolved theme is set by ui/js/lib/theme.js as <html data-theme="light|dark">. The media-query block covers
+   the instant before JS runs. Keep --bg in sync with WINDOW_BG in space_agents/main.py (avoids a flash on launch). */
+
+:root {
+  color-scheme: light;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --emoji: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --sidebar-w: 268px;
+
+  --bg: #ffffff;
+  --bg-subtle: #f6f7f9;
+  --bg-hover: #f0f1f5;
+  --bg-active: #e8e9f0;
+  --bg-input: #ffffff;
+  --bg-overlay: rgba(17, 19, 33, 0.45);
+  --surface: #ffffff;
+  --border: #e3e5eb;
+  --border-strong: #cdd1da;
+
+  --text: #1d1f26;
+  --text-muted: #5d6472;
+  --text-faint: #8b919d;
+
+  --accent: #5b5bd6;
+  --accent-hover: #4a4ac2;
+  --accent-text: #4747b8;
+  --accent-contrast: #ffffff;
+  --accent-soft: #eeeefc;
+  --focus-ring: 0 0 0 3px rgba(91, 91, 214, 0.3);
+
+  --danger: #cf3048;
+  --danger-soft: #fdecef;
+  --success: #1c9a5e;
+  --success-soft: #e6f6ee;
+  --warning: #b86e00;
+  --warning-soft: #fff4e0;
+
+  --sidebar-bg: #191c3a;
+  --sidebar-bg-2: #20244a;
+  --sidebar-text: #b9bcdc;
+  --sidebar-text-strong: #ffffff;
+  --sidebar-text-faint: #8286b0;
+  --sidebar-hover: rgba(255, 255, 255, 0.07);
+  --sidebar-active: #5b5bd6;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(16, 18, 30, 0.06);
+  --shadow: 0 4px 14px rgba(16, 18, 30, 0.1);
+  --shadow-lg: 0 18px 50px rgba(16, 18, 30, 0.22);
+
+  --code-bg: #f3f4f7;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235d6472' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1d21;
+  --bg-subtle: #212429;
+  --bg-hover: #26292f;
+  --bg-active: #2d3138;
+  --bg-input: #222529;
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+  --surface: #222529;
+  --border: #33373e;
+  --border-strong: #454a53;
+
+  --text: #e6e7ea;
+  --text-muted: #a3a8b2;
+  --text-faint: #767c87;
+
+  --accent: #7272e8;
+  --accent-hover: #8585f0;
+  --accent-text: #a5a5ff;
+  --accent-contrast: #ffffff;
+  --accent-soft: #2b2c4f;
+  --focus-ring: 0 0 0 3px rgba(114, 114, 232, 0.4);
+
+  --danger: #f0566c;
+  --danger-soft: #3d2228;
+  --success: #3cc583;
+  --success-soft: #1d3329;
+  --warning: #f0a830;
+  --warning-soft: #3a2f1c;
+
+  --sidebar-bg: #121427;
+  --sidebar-bg-2: #181b33;
+  --sidebar-text: #a9acd0;
+  --sidebar-text-strong: #ffffff;
+  --sidebar-text-faint: #6f739c;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-active: #5b5bd6;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
+
+  --code-bg: #26292f;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3a8b2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #1a1d21;
+    --bg-subtle: #212429;
+    --text: #e6e7ea;
+    --sidebar-bg: #121427;
+  }
+}

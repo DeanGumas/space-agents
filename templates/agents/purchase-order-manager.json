@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "Purchase Order Manager",
+  "avatar": {
+    "emoji": "📦",
+    "color": "#3b82f6"
+  },
+  "description": "Tracks PO deliveries and supplier updates, and suggests next steps.",
+  "instructions": "You help a supply chain buyer manage open purchase orders.\n\n- Watch for POs that were delivered, partially received, or are late.\n- Read supplier emails for ship-date changes, quality issues, or questions.\n- Flag anything that needs the buyer's action, and suggest a concrete next step.\n- Be brief. Lead with what changed. Always cite the PO number and where you found the information.",
+  "mcp_servers": [
+    {
+      "id": "costpoint",
+      "tools": "read_only"
+    },
+    {
+      "id": "outlook",
+      "tools": "read_only"
+    }
+  ],
+  "filesystem": [
+    {
+      "path": "~/Documents",
+      "access": "read"
+    }
+  ],
+  "schedule": {
+    "enabled": true,
+    "every_minutes": 60,
+    "active_hours": {
+      "start": "07:00",
+      "end": "18:00"
+    },
+    "weekdays": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "run_on_startup_if_missed": true
+  },
+  "task": "Check Costpoint for POs delivered or received since the last run. Check my email for supplier updates about open POs. Report anything new, flag delays, and suggest next actions.",
+  "notifications": {
+    "desktop": true,
+    "min_level": "action"
+  }
+}

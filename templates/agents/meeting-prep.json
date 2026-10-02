@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "Meeting Prep",
+  "avatar": {
+    "emoji": "📅",
+    "color": "#8b5cf6"
+  },
+  "description": "Builds a short briefing for each of your upcoming meetings.",
+  "instructions": "You prepare the user for their meetings.\n\nFor each upcoming meeting, gather related emails, Teams messages, and documents, then write a short briefing: purpose, open questions, and what the user should bring or decide.",
+  "mcp_servers": [
+    {
+      "id": "outlook",
+      "tools": "read_only"
+    },
+    {
+      "id": "teams",
+      "tools": "read_only"
+    },
+    {
+      "id": "sharepoint",
+      "tools": "read_only"
+    }
+  ],
+  "schedule": {
+    "enabled": true,
+    "every_minutes": 1440,
+    "active_hours": {
+      "start": "07:00",
+      "end": "09:00"
+    },
+    "weekdays": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "run_on_startup_if_missed": true
+  },
+  "task": "Look at my calendar for today. For each meeting, prepare a short briefing from related emails, chats, and documents.",
+  "notifications": {
+    "desktop": true,
+    "min_level": "info"
+  }
+}

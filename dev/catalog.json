@@ -1,0 +1,92 @@
+{
+  "catalog_version": 1,
+  "_comment": "Offline stand-in for GET {mcp_base_url}/mcp (PLAN.md §2.6). Used when SPACE_AGENTS_CATALOG_FILE points here.",
+  "servers": [
+    {
+      "id": "costpoint",
+      "name": "Costpoint",
+      "description": "Purchase orders, receipts, vendors, and project charge codes",
+      "type": "openapi",
+      "tools": [
+        { "name": "search_purchase_orders", "description": "Find POs by vendor, status, or date", "read_only": true },
+        { "name": "get_purchase_order", "description": "Full details for one PO", "read_only": true },
+        { "name": "search_receipts", "description": "Find PO receipts/deliveries by date or vendor", "read_only": true },
+        { "name": "get_vendor", "description": "Vendor contact and performance info", "read_only": true },
+        { "name": "update_purchase_order", "description": "Modify a PO", "read_only": false }
+      ]
+    },
+    {
+      "id": "outlook",
+      "name": "Outlook",
+      "description": "Your email and calendar",
+      "type": "mcp",
+      "tools": [
+        { "name": "search_messages", "description": "Search your mailbox", "read_only": true },
+        { "name": "get_message", "description": "Read one email", "read_only": true },
+        { "name": "list_events", "description": "Calendar events in a date range", "read_only": true },
+        { "name": "send_message", "description": "Send an email", "read_only": false }
+      ]
+    },
+    {
+      "id": "teams",
+      "name": "Microsoft Teams",
+      "description": "Chats and channel messages",
+      "type": "mcp",
+      "tools": [
+        { "name": "search_chats", "description": "Search your chats", "read_only": true },
+        { "name": "get_channel_messages", "description": "Recent messages in a channel", "read_only": true },
+        { "name": "post_message", "description": "Post a message", "read_only": false }
+      ]
+    },
+    {
+      "id": "sharepoint",
+      "name": "SharePoint",
+      "description": "Team sites, documents, and lists",
+      "type": "mcp",
+      "tools": [
+        { "name": "search_documents", "description": "Search documents across sites", "read_only": true },
+        { "name": "get_document", "description": "Download a document", "read_only": true }
+      ]
+    },
+    {
+      "id": "jira",
+      "name": "Jira",
+      "description": "Issues, sprints, and boards",
+      "type": "openapi",
+      "tools": [
+        { "name": "search_issues", "description": "JQL search", "read_only": true },
+        { "name": "get_issue", "description": "Issue details and comments", "read_only": true },
+        { "name": "create_issue", "description": "Create an issue", "read_only": false }
+      ]
+    },
+    {
+      "id": "confluence",
+      "name": "Confluence",
+      "description": "Wiki pages and spaces",
+      "type": "openapi",
+      "tools": [
+        { "name": "search_pages", "description": "CQL search", "read_only": true },
+        { "name": "get_page", "description": "Page content", "read_only": true }
+      ]
+    },
+    {
+      "id": "teamcenter",
+      "name": "Teamcenter",
+      "description": "Parts, BOMs, and engineering change orders",
+      "type": "openapi",
+      "tools": [
+        { "name": "search_items", "description": "Find parts and items", "read_only": true },
+        { "name": "get_bom", "description": "Bill of materials for an item", "read_only": true },
+        { "name": "list_change_orders", "description": "Open ECOs", "read_only": true }
+      ]
+    },
+    {
+      "id": "docs",
+      "name": "Document Processing",
+      "description": "Converts PDFs, Office files, and scans to text",
+      "type": "mcp",
+      "role": "document_processing",
+      "tools": [{ "name": "convert_document", "description": "Convert a document to text (VLM optional)", "read_only": true }]
+    }
+  ]
+}

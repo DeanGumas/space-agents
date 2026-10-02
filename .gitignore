@@ -13,3 +13,9 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Local config (copy .env.example to .env)
+.env
+
+# Dev data (SPACE_AGENTS_DATA_DIR=./.devdata)
+.devdata/

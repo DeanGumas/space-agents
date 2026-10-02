@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      CSP notes (see docs/ui.md):
+      - 'unsafe-eval' is required by pywebview's injected bridge (it builds API stubs with `new Function`).
+      - The sha256 allows exactly the inline import map below; tests/test_ui.py fails if they drift apart.
+      - No inline scripts or event-handler attributes are allowed, so sanitized-but-hostile markup can't run code.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-eval' 'sha256-AiXCt4TZ6xzf22pYzqSj+EnMzQP/ykm4Z6FdP5sttz8='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Space Agents</title>
+    <link rel="icon" href="/img/logo.svg" />
+    <link rel="stylesheet" href="/css/tokens.css" />
+    <link rel="stylesheet" href="/css/app.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "preact": "/vendor/preact.module.js",
+          "preact/hooks": "/vendor/preact-hooks.module.js",
+          "htm": "/vendor/htm.module.js",
+          "htm/preact": "/vendor/htm-preact.module.js",
+          "@preact/signals-core": "/vendor/signals-core.module.js",
+          "@preact/signals": "/vendor/signals.module.js",
+          "marked": "/vendor/marked.esm.js",
+          "dompurify": "/vendor/purify.es.mjs"
+        }
+      }
+    </script>
+    <script type="module" src="/js/main.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

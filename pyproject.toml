@@ -1,0 +1,39 @@
+[project]
+name = "space-agents"
+version = "0.1.0"
+description = "Local-first agent management desktop app for self-hosted, OpenAI-compatible models and MCP servers."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pywebview>=5.0",
+    "httpx[http2]>=0.27",
+    "truststore>=0.9",
+    "keyring>=25.0",
+    "tzdata",
+    "platformdirs>=4.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "pyinstaller>=6.10",
+]
+
+[project.scripts]
+space-agents = "space_agents.main:run"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 30

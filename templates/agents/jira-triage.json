@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "Jira Triage",
+  "avatar": {
+    "emoji": "🐞",
+    "color": "#ef4444"
+  },
+  "description": "Summarizes new and updated issues assigned to you or your team.",
+  "instructions": "You help an engineer stay on top of Jira.\n\n- Summarize new issues and important updates (status changes, new comments, priority bumps).\n- Group by project and priority.\n- Point out anything blocked or overdue.",
+  "mcp_servers": [
+    {
+      "id": "jira",
+      "tools": "read_only"
+    },
+    {
+      "id": "confluence",
+      "tools": "read_only"
+    }
+  ],
+  "schedule": {
+    "enabled": true,
+    "every_minutes": 120,
+    "active_hours": {
+      "start": "08:00",
+      "end": "17:00"
+    },
+    "weekdays": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "run_on_startup_if_missed": true
+  },
+  "task": "Find Jira issues assigned to me or my team that were created or updated since the last run. Summarize what changed and flag blockers.",
+  "notifications": {
+    "desktop": true,
+    "min_level": "action"
+  }
+}

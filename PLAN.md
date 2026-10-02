@@ -97,7 +97,7 @@ uv run python -m space_agents --debug
 
 | | Windows | macOS |
 |---|---|---|
-| App data | `%APPDATA%\SpaceAgents\` | `~/Library/Application Support/SpaceAgents/` |
+| App data | `%LOCALAPPDATA%\SpaceAgents\` (local, not roaming: SQLite doesn't belong in roaming profiles) | `~/Library/Application Support/SpaceAgents/` |
 | Logs | `%LOCALAPPDATA%\SpaceAgents\logs\` | `~/Library/Logs/SpaceAgents/` |
 
 ```
@@ -203,6 +203,9 @@ Effective values are resolved in layers. The first two are under admin control, 
    If the URLs ever move, the admin changes this one file and every client picks up the change on its next launch,
    with no reinstall. The last good copy is cached, so the app still starts if the service is briefly unreachable.
 3. **User overrides:** Settings → Advanced, for testing or special cases. Hidden from most users.
+
+For development and testing, a `.env` file, environment variables, and CLI flags sit above these layers (see
+`docs/configuration.md`).
 
 **LLM client**
 - Targets the **OpenAI Chat Completions** API with `stream: true` and `tools`, which the vLLM-backed gateway serves.
@@ -610,7 +613,19 @@ space-agents/
 
 Each phase ends with something usable and demoable.
 
-### Phase 0: Skeleton and de-risking
+### Phase 0: Skeleton and de-risking: ✅ skeleton done (2026-10-01); packaging spike and CI still open
+
+Done:
+- Native window and Slack-style UI in light and dark mode.
+- Agent create/edit/delete with the full manifest editor, emoji or picture avatars, and templates.
+- Placeholder chat replies streamed through the real event pipeline.
+- Layered config with `.env`, an offline `dev/catalog.json`, and `--smoke-test`.
+- 44 tests.
+- Docs in `docs/`.
+
+Deviation: dependencies install from `requirements.txt` for now (offline-friendly); `uv.lock` comes later.
+
+Original scope:
 - Repo scaffolding: `uv` project (`pyproject.toml`, `uv.lock`, `.python-version` = 3.12), ruff, pytest, CI on
   Windows + macOS.
 - `scripts/vendor.py` and the vendored Preact/htm/marked/DOMPurify files, wired up with an import map.
