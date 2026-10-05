@@ -3,7 +3,8 @@
 import { html } from "htm/preact";
 import { useState, useRef, useLayoutEffect, useEffect } from "preact/hooks";
 import { Avatar, Icon } from "../components/common.js";
-import { messages, sendMessage, openEditor, toastError, boot } from "../state.js";
+import { ActivitySteps, ChangeCards } from "../components/Activity.js";
+import { messages, sendMessage, stopAgent, openEditor, toastError, boot } from "../state.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { cx, formatTime, formatDay, isSameDay, scheduleSummary } from "../lib/util.js";
 import { toDraft } from "./AgentEditor.js";
@@ -25,6 +26,8 @@ export function Channel({ agent }) {
 function ChannelHeader({ agent, onEdit }) {
   const busy = agent.status === "responding";
   const sub = agent.description || scheduleSummary(agent.schedule) || "No description";
+  const llm = boot.value?.llm || {};
+  const model = agent.model?.name || (llm.ready ? llm.default_model : "");
   return html`
     <header class="channel-header">
       <${Avatar} agent=${agent} size=${32} />
@@ -34,10 +37,11 @@ function ChannelHeader({ agent, onEdit }) {
       </div>
       ${busy
         ? html`<span class="chip accent"><span class="status-dot busy"></span> Responding</span>`
-        : html`<span class="chip warning" title="Model connections arrive in Phase 1">
+        : !llm.ready &&
+          html`<span class="chip warning" title="Set SPACE_AGENTS_LLM_BASE_URL and SPACE_AGENTS_API_KEY (see .env.example)">
             <${Icon} name="unplug" size="sm" /> Not connected
           </span>`}
-      ${agent.model?.name && html`<span class="chip" title="Model"><${Icon} name="cpu" size="sm" /> ${agent.model.name}</span>`}
+      ${model && html`<span class="chip" title="Model"><${Icon} name="cpu" size="sm" /> ${model}</span>`}
       <button class="btn sm" disabled title="Scheduled and on-demand runs arrive in Phase 3">
         <${Icon} name="play" size="sm" /> Run now
       </button>
@@ -119,7 +123,7 @@ function Message({ msg, agent, first }) {
   if (isUser) {
     body = html`<div class="md" style=${{ whiteSpace: "pre-wrap" }}>${msg.content}</div>`;
   } else if (streaming && !msg.content) {
-    body = html`<div class="typing">Thinking…</div>`;
+    body = msg.tool_calls?.length ? null : html`<div class="typing">Thinking…</div>`;
   } else {
     body = html`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(msg.content) }}></div>
       ${streaming && html`<span class="cursor"></span>`}
@@ -140,7 +144,9 @@ function Message({ msg, agent, first }) {
           <span class="author">${isUser ? "You" : agent.name}</span>
           <span class="time">${formatTime(msg.created_at)}</span>
         </div>`}
+        ${!isUser && html`<${ActivitySteps} calls=${msg.tool_calls} />`}
         <div class="body">${body}</div>
+        ${!isUser && html`<${ChangeCards} changes=${msg.changes} />`}
       </div>
     </div>
   `;
@@ -191,14 +197,18 @@ function Composer({ agent }) {
             }
           }}
         ></textarea>
-        <button
-          class="btn primary icon-only"
-          title="Send (Enter)"
-          disabled=${!text.trim() || busy || sending}
-          onClick=${submit}
-        >
-          <${Icon} name="send-horizontal" />
-        </button>
+        ${busy
+          ? html`<button class="btn icon-only" title="Stop" onClick=${() => stopAgent(agent.id)}>
+              <${Icon} name="square" />
+            </button>`
+          : html`<button
+              class="btn primary icon-only"
+              title="Send (Enter)"
+              disabled=${!text.trim() || sending}
+              onClick=${submit}
+            >
+              <${Icon} name="send-horizontal" />
+            </button>`}
       </div>
       <div class="hint">Enter to send · Shift + Enter for a new line</div>
     </div>

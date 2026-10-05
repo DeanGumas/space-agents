@@ -86,11 +86,20 @@ function AgentRow({ agent, active, unreadCount }) {
 }
 
 function ConnectionStatus() {
+  const llm = boot.value?.llm || {};
   const url = boot.value?.config?.find((c) => c.key === "llm_base_url")?.value;
+  if (llm.ready) {
+    return html`
+      <span class="conn" title=${`Model gateway: ${url}`}>
+        <span class="dot ready"></span>
+        <span>Ready${llm.default_model ? ` · ${llm.default_model}` : ""}</span>
+      </span>
+    `;
+  }
   return html`
-    <span class="conn" title=${url ? `Model gateway: ${url}\nNot connected yet (Phase 1)` : "No model gateway configured"}>
+    <span class="conn" title=${url ? `Model gateway: ${url}\nNo API key set` : "No model gateway configured"}>
       <span class="dot"></span>
-      <span>${url ? "Offline mode" : "No server set"}</span>
+      <span>${url ? "No API key" : "No server set"}</span>
     </span>
   `;
 }

@@ -8,6 +8,63 @@
     "dompurify": "3.4.16",
     "lucide-static": "1.49.0"
   },
+  "pyodide": {
+    "version": "314.0.7",
+    "packages": [
+      "numpy",
+      "pandas",
+      "lxml",
+      "matplotlib",
+      "typing-extensions"
+    ],
+    "extra_wheels": {
+      "et-xmlfile": [
+        "et-xmlfile",
+        "2.0.0",
+        [
+          "et_xmlfile"
+        ],
+        []
+      ],
+      "openpyxl": [
+        "openpyxl",
+        "3.1.5",
+        [
+          "openpyxl"
+        ],
+        [
+          "et-xmlfile"
+        ]
+      ],
+      "python-docx": [
+        "python-docx",
+        "1.2.0",
+        [
+          "docx"
+        ],
+        [
+          "lxml",
+          "typing-extensions"
+        ]
+      ],
+      "pypdf": [
+        "pypdf",
+        "6.19.0",
+        [
+          "pypdf"
+        ],
+        []
+      ],
+      "xlsxwriter": [
+        "xlsxwriter",
+        "3.2.9",
+        [
+          "xlsxwriter"
+        ],
+        []
+      ]
+    }
+  },
   "files": {
     "htm-preact.module.js": "b3f51db71c12eabba61819feb74ace7cadc2744af41866c3fcad2ab960415746",
     "htm.module.js": "ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4",
@@ -2143,6 +2200,32 @@
     "preact-hooks.module.js": "a6ee626f2d01570592dd569a792e3f050154aa02890eead8c223fa3ed5aa3d5a",
     "preact.module.js": "c30e721ebfdc6e2ad4c18c14d2dfb82667829c8aec27de1207774e3fc16858a8",
     "purify.es.mjs": "c44274a7959cfdd4da871fa78a5d5fbbef55db68d118c5c0833bc4b5cf9633ad",
+    "pyodide/LICENSE": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+    "pyodide/contourpy-1.3.3-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "0ac15ebf9f820d2d1c3526388aa2818b631cb6c4aae1682efd6b4cc12c1f302c",
+    "pyodide/cycler-0.12.1-py3-none-any.whl": "8ee450085f15b47f78b034d60059af6a3649e98fa5dde073363437742cc0b4ea",
+    "pyodide/et_xmlfile-2.0.0-py3-none-any.whl": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa",
+    "pyodide/fonttools-4.62.1-py3-none-any.whl": "0d1516e073fd0a8d8e6d9af46417b6a26209a42518024a18f7085e72d2599605",
+    "pyodide/kiwisolver-1.5.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "47781998156721147c128a3c74547d5703e0e3cc454d8203e629339368308a93",
+    "pyodide/lxml-6.1.3-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "6a0b98f57a538cb6af4868c3499efec2bb52f7ed59fed94b7fbf195d6e40281f",
+    "pyodide/matplotlib-3.10.8-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "722857932f8f62eac64f8439af15c94d427f9fb945f9590cd242805c983d2d54",
+    "pyodide/numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "a292c1f5d7d8a2208cd5e94fc467604c131cabcd2fc14fed6eefde121e7fabdf",
+    "pyodide/openpyxl-3.1.5-py2.py3-none-any.whl": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2",
+    "pyodide/packaging-26.1-py3-none-any.whl": "565acbbea54da30348b6d68b6a54373e6f777987db9f1db6966b4b3a5060d303",
+    "pyodide/pandas-3.0.2-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "45ff57772cc2f366a8582c7d3097cc4e6676342ecd5a3c08184a43462d5a02ae",
+    "pyodide/pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl": "e29838b7a756e4ee0f27a9cfa9a387ee0dfa2e9dd44be2dd595130b9f9d93ac3",
+    "pyodide/pyodide-lock.json": "65aa979da318f927be93b900232cf716a8e0fa12f86b30742b4ed401ff6a6b52",
+    "pyodide/pyodide.asm.mjs": "f7cdc8ece80678ceb712f8e65ebe6d3a83203a180c399865f49612a051693635",
+    "pyodide/pyodide.asm.wasm": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
+    "pyodide/pyodide.mjs": "6f1d60f7bf529beb300f0f47983c921d3982363640ba20af0e38efdddbc66109",
+    "pyodide/pyparsing-3.3.2-py3-none-any.whl": "f0dd8225b5f8e945980b400bd465b4b90cb0498a2eede0d9dbea98372f6110c5",
+    "pyodide/pypdf-6.19.0-py3-none-any.whl": "7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14",
+    "pyodide/python_dateutil-2.9.0.post0-py2.py3-none-any.whl": "9b13365edf9c188f570baf9c540bbb3029ada2a2dacb9694b3659941693ee9e5",
+    "pyodide/python_docx-1.2.0-py3-none-any.whl": "3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7",
+    "pyodide/python_stdlib.zip": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
+    "pyodide/pytz-2026.1.post1-py2.py3-none-any.whl": "b8249d6450146e0b61e6d710dc02ebb35a904796c4c2f97fe87d4ac5872db36a",
+    "pyodide/six-1.17.0-py2.py3-none-any.whl": "228c50f73aa7addf2c2ccf2979c256802a59ab69cad8152b31b9443cc8140f42",
+    "pyodide/typing_extensions-4.15.0-py3-none-any.whl": "4fec68770a05408e668a4fa53d6bf4f0f684b9dacf820c7c5d6e97d3ad225e29",
+    "pyodide/xlsxwriter-3.2.9-py3-none-any.whl": "9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3",
     "signals-core.module.js": "bfbb64b74f7f06a4f7c6f6bb854cccb40d03f1e96305d43c41876cba581ea112",
     "signals.module.js": "baa602be76dbecd6f4b3d1a4ff5b5ec694bc22a93f7a1a801bdbdca636d211ed"
   }

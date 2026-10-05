@@ -4,7 +4,7 @@ Layout inside the data directory:
 
     agents/<id>.json     one manifest per agent (portable, no secrets)
     avatars/<id>.png     optional avatar picture (already cropped/resized by the UI)
-    space.db             SQLite: messages (later: runs, tool_calls, notifications, memory)
+    space.db             SQLite: messages, tool_calls, changes, file_versions, doc_cache/doc_pages/doc_fts
 
 Thread-safety: bridge calls arrive on pywebview worker threads and the core loop runs on its own thread, so all
 SQLite access goes through one connection guarded by a lock. Manifest writes are atomic (temp file + rename).
@@ -43,6 +43,67 @@ SCHEMA = [
     );
     CREATE INDEX messages_agent ON messages (agent_id, id);
     """,
+    # v2: agent loop activity, proposed changes, file history, document cache
+    """
+    ALTER TABLE messages ADD COLUMN usage TEXT;
+    CREATE TABLE tool_calls (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id  INTEGER NOT NULL,
+        agent_id    TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        args        TEXT NOT NULL,
+        summary     TEXT NOT NULL DEFAULT '',
+        result      TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'error')),
+        started_at  TEXT NOT NULL,
+        duration_ms INTEGER
+    );
+    CREATE INDEX tool_calls_message ON tool_calls (message_id, id);
+    CREATE TABLE changes (
+        id           TEXT PRIMARY KEY,
+        agent_id     TEXT NOT NULL,
+        message_id   INTEGER,
+        tool_call_id INTEGER,
+        target       TEXT NOT NULL,
+        kind         TEXT NOT NULL CHECK (kind IN ('create', 'modify')),
+        staged       TEXT NOT NULL,
+        base_sha256  TEXT,
+        summary      TEXT NOT NULL DEFAULT '{}',
+        status       TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'discarded', 'conflicted', 'undone')),
+        version_id   INTEGER,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+    );
+    CREATE INDEX changes_message ON changes (message_id);
+    CREATE TABLE file_versions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        path        TEXT NOT NULL,
+        blob        TEXT NOT NULL,
+        sha256      TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        change_id   TEXT,
+        created_at  TEXT NOT NULL
+    );
+    CREATE TABLE doc_cache (
+        sha256      TEXT PRIMARY KEY,
+        path        TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        mtime       REAL NOT NULL,
+        kind        TEXT NOT NULL,
+        page_count  INTEGER NOT NULL,
+        info        TEXT NOT NULL DEFAULT '{}',
+        used_at     TEXT NOT NULL
+    );
+    CREATE INDEX doc_cache_path ON doc_cache (path, size, mtime);
+    CREATE TABLE doc_pages (
+        sha256  TEXT NOT NULL,
+        page    INTEGER NOT NULL,
+        status  TEXT NOT NULL,
+        text    TEXT NOT NULL,
+        PRIMARY KEY (sha256, page)
+    );
+    CREATE VIRTUAL TABLE doc_fts USING fts5(sha256 UNINDEXED, page UNINDEXED, text);
+    """,
 ]
 
 
@@ -71,6 +132,30 @@ class Store:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    # --- generic query helpers (used by documents/, changes.py, runtime/) ---------------------------------------
+
+    def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
+        with self._lock:
+            return self._db.execute(sql, params)
+
+    def executemany(self, sql: str, rows: list[tuple]) -> None:
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.executemany(sql, rows)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def query(self, sql: str, params: tuple | dict = ()) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def query_one(self, sql: str, params: tuple | dict = ()) -> dict[str, Any] | None:
+        rows = self.query(sql, params)
+        return rows[0] if rows else None
 
     def _migrate(self) -> None:
         with self._lock:
@@ -126,6 +211,8 @@ class Store:
             path.unlink()
             (self.avatars_dir / f"{agent_id}.png").unlink(missing_ok=True)
             self._db.execute("DELETE FROM messages WHERE agent_id = ?", (agent_id,))
+            self._db.execute("DELETE FROM tool_calls WHERE agent_id = ?", (agent_id,))
+            self._db.execute("DELETE FROM changes WHERE agent_id = ? AND status = 'pending'", (agent_id,))
 
     # --- avatars ------------------------------------------------------------------------------------------------
 
@@ -173,8 +260,17 @@ class Store:
             raise NotFound(message_id)
         return dict(row)
 
-    def update_message(self, message_id: int, *, content: str | None = None, status: str | None = None) -> None:
+    def update_message(
+        self,
+        message_id: int,
+        *,
+        content: str | None = None,
+        status: str | None = None,
+        usage: dict[str, int] | None = None,
+    ) -> None:
         with self._lock:
+            if usage is not None:
+                self._db.execute("UPDATE messages SET usage = ? WHERE id = ?", (json.dumps(usage), message_id))
             if content is not None:
                 self._db.execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
             if status is not None:

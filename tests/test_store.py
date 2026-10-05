@@ -3,7 +3,7 @@ import base64
 import pytest
 
 from space_agents.manifest import Manifest
-from space_agents.store import PNG_MAGIC, NotFound, Store
+from space_agents.store import PNG_MAGIC, SCHEMA, NotFound, Store
 
 PNG = PNG_MAGIC + b"\x00" * 64
 
@@ -93,5 +93,5 @@ def test_recover_interrupted(store):
 def test_migrations_are_idempotent(tmp_path):
     Store(tmp_path).close()
     s = Store(tmp_path)
-    assert s._db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert s._db.execute("PRAGMA user_version").fetchone()[0] == len(SCHEMA)
     s.close()

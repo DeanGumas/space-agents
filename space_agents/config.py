@@ -29,7 +29,7 @@ ENV_PREFIX = "SPACE_AGENTS_"
 @dataclass(frozen=True)
 class Spec:
     key: str
-    kind: str  # "url" | "bool" | "path" | "list" | "str"
+    kind: str  # "url" | "bool" | "path" | "list" | "str" | "secret"
     label: str
     help: str
 
@@ -40,7 +40,16 @@ SPECS: tuple[Spec, ...] = (
     Spec("data_dir", "path", "Data folder", "Where agents, settings, and history are stored"),
     Spec("debug", "bool", "Debug mode", "Enables webview devtools and verbose logging"),
     Spec("catalog_file", "path", "Offline catalog file", "Dev only: JSON file used instead of GET /mcp"),
-    Spec("models", "list", "Offline model list", "Dev only: comma-separated models used instead of GET /models"),
+    Spec(
+        "models", "list", "Model list", "Comma-separated models offered in the editor (until GET /models is wired up)"
+    ),
+    Spec("api_key", "secret", "API key", "Dev/test only via .env; moves to the OS keychain with onboarding"),
+    Spec(
+        "reasoning_effort",
+        "str",
+        "Reasoning effort",
+        "Sent to reasoning models (minimal/low/medium/high) to bound token use; dropped if a model rejects it",
+    ),
 )
 SPEC_BY_KEY = {s.key: s for s in SPECS}
 
@@ -96,8 +105,13 @@ def _coerce(spec: Spec, raw: Any, base_dir: Path | None) -> Any:
             p = base_dir / p
         return p.resolve()
     if spec.kind == "url":
-        return str(raw).strip().rstrip("/")
-    return str(raw)
+        url = str(raw).strip().rstrip("/")
+        # Accept a full endpoint URL too: ".../v1/chat/completions" → ".../v1".
+        for suffix in ("/chat/completions", "/completions", "/models"):
+            if spec.key == "llm_base_url" and url.endswith(suffix):
+                url = url[: -len(suffix)]
+        return url
+    return str(raw).strip()
 
 
 class Config:
@@ -128,6 +142,18 @@ class Config:
         return self.get("debug")
 
     @property
+    def api_key(self) -> str:
+        return self.get("api_key")
+
+    @property
+    def reasoning_effort(self) -> str:
+        return self.get("reasoning_effort")
+
+    @property
+    def llm_ready(self) -> bool:
+        return bool(self.llm_base_url and self.api_key)
+
+    @property
     def catalog_file(self) -> Path | None:
         return self.get("catalog_file")
 
@@ -143,6 +169,8 @@ class Config:
             value = r.value
             if isinstance(value, Path):
                 value = str(value)
+            if spec.kind == "secret":
+                value = "set" if value else ""  # never send secrets to the UI
             out.append(
                 {
                     "key": spec.key,
@@ -171,6 +199,8 @@ def load_config(
     defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
     defaults.setdefault("data_dir", str(paths.default_data_dir()))
     defaults.setdefault("debug", False)
+    defaults.setdefault("api_key", "")
+    defaults.setdefault("reasoning_effort", "low")
 
     if dotenv_path is True:
         dotenv_path = find_dotenv()

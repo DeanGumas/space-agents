@@ -15,6 +15,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `model.name`, `model.temperature` | Model id from `/models`; temperature is shown as "Creativity" | Model |
 | `mcp_servers[]` | `{id, tools: "read_only" \| [names]}`. The document server is implicit and not listed | Data sources |
 | `filesystem[]` | `{path, access: "read" \| "read_write"}`. Paths under home are stored as `~/…` | Files & folders |
+| `file_changes` | `new_files: allow\|ask`, `existing_files: ask\|allow_with_backup` (see documents-and-sandbox.md) | Files & folders |
 | `schedule`, `task` | When to run and what to do each run (task required if the schedule is on) | Schedule |
 | `notifications` | Desktop popups and minimum level (`info` / `action` / `urgent`) | Schedule |
 | `memory`, `limits` | Notes between runs; per-run tool-call and time caps | Advanced |
@@ -62,7 +63,7 @@ than a separate copy in JS.
 
 ## Server catalog
 
-The Data sources tab lists servers from the catalog. For now that's `dev/catalog.json`; in Phase 2 it's
+The Data sources tab lists servers from the catalog. For now that's `dev/catalog.json`; in Phase 2a it's
 `GET {mcp_base_url}/mcp`, using the same format (PLAN.md §2.6):
 
 ```jsonc
@@ -73,5 +74,5 @@ The Data sources tab lists servers from the catalog. For now that's `dev/catalog
 
 - **Read-only tools** can be granted all at once (`"read_only"`) or picked individually.
 - **Write tools** are shown locked.
-- **The `document_processing` server** shows as "Always on".
+- **The `document_processing` server** (GPU scans/VLM) shows as "Always available". Everyday documents are read locally (PLAN.md §2.8).
 - **Servers an agent references that aren't in the catalog** are shown so the user can remove them.

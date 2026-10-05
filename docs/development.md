@@ -14,8 +14,19 @@ cp .env.example .env                          # local config (git-ignored); see 
 `pyproject.toml` holds project metadata, the core dependency list, and ruff/pytest config. Once the dependency set
 settles, we'll switch to `uv sync` with a `uv.lock`.
 
-The front-end libraries are already vendored in `ui/vendor/` (no npm). To change versions, edit `PACKAGES` in
-`scripts/vendor.py` and run `python scripts/vendor.py --update` (needs network).
+Third-party front-end assets live in `ui/vendor/` (no npm), managed by `scripts/vendor.py`:
+
+- **JS libraries and Lucide icons** are small and committed.
+- **The Pyodide sandbox** (runtime plus allow-listed wheels, 34 MB) is **git-ignored**. After cloning, run
+  `python scripts/vendor.py` once to fetch it. Every file is verified against upstream hashes: Pyodide's lock file,
+  or PyPI for pure-Python wheels.
+
+To change versions, edit `PACKAGES` / `PYODIDE` in `scripts/vendor.py` and run `--update`. `--check` verifies
+offline; add `--strict` to also require the Pyodide files (useful in CI before packaging).
+
+The sandbox may load only the packages listed in the trimmed `ui/vendor/pyodide/pyodide-lock.json`. To allow a new
+one, add it to `PYODIDE["packages"]` if Pyodide ships it, or to `PYODIDE["extra_wheels"]` if it's a pure-Python wheel
+from PyPI.
 
 ## Run
 
@@ -37,6 +48,12 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 .venv/bin/python -m space_agents --smoke-test --data-dir /tmp/sa-smoke   # opens the real window, exit 0 = OK
 ```
 
+- **Sandbox self-test:** `python -m space_agents --sandbox-selftest --data-dir /tmp/sa-sbx` runs the Pyodide
+  checks in the real webview (openpyxl/pandas round-trips, no network, no host disk, timeouts, recovery) and prints
+  JSON. Exit 0 = all pass.
+- **Sample documents:** `python dev/make_sample_docs.py` writes realistic test files to `dev/sample-docs/`.
+- **Live model:** with `SPACE_AGENTS_LLM_BASE_URL` + `SPACE_AGENTS_API_KEY` in `.env`, chat uses the real model.
+  Token usage per run is logged ("Usage for …").
 - **Smoke test:** launches the actual pywebview window, waits for the UI to report ready, checks the DOM rendered and
   no JS errors occurred, then exits. Use it in CI on Windows and macOS runners.
 - **`tests/test_ui.py`** catches the common front-end breakages without a browser: CSP hash drift, missing vendored

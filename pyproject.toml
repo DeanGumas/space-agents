@@ -11,6 +11,7 @@ dependencies = [
     "keyring>=25.0",
     "tzdata",
     "platformdirs>=4.0",
+    "pypdfium2>=5.0",
 ]
 
 [dependency-groups]
@@ -19,6 +20,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
     "respx>=0.21",
+    "fpdf2>=2.8",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
     "ruff>=0.6",
     "pyinstaller>=6.10",
 ]

@@ -7,8 +7,12 @@ import time
 import pytest
 
 from space_agents.bridge import Api, to_display_path
+from space_agents.changes import ChangeManager
 from space_agents.config import load_config
 from space_agents.core import Core, EventBus
+from space_agents.documents.library import DocumentLibrary
+from space_agents.runtime.loop import AgentRunner
+from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.settings import UserSettings
 from space_agents.store import PNG_MAGIC, Store
 
@@ -28,6 +32,9 @@ def env(tmp_path):
     delivered: list[dict] = []
     events.attach(lambda payload: delivered.extend(json.loads(payload)))
     events.start()
+    sandbox = PyodideSandbox(tmp_path / "workspaces")
+    docs = DocumentLibrary(store)
+    changes = ChangeManager(store, tmp_path, events)
     api = Api(
         config=config,
         reload_config=reload_config,
@@ -35,6 +42,9 @@ def env(tmp_path):
         settings=UserSettings(tmp_path),
         core=core,
         events=events,
+        sandbox=sandbox,
+        runner=AgentRunner(store=store, events=events, docs=docs, sandbox=sandbox, changes=changes, config=config),
+        changes=changes,
     )
     yield api, delivered
     core.stop()

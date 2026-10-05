@@ -11,8 +11,10 @@ Conventions
 
 from __future__ import annotations
 
+import concurrent.futures
 import functools
 import logging
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -22,11 +24,14 @@ import webview
 
 from space_agents import __version__, paths
 from space_agents.catalog import load_catalog_file, load_templates
+from space_agents.changes import ChangeError, ChangeManager
 from space_agents.config import Config
 from space_agents.core import Core, EventBus
 from space_agents.manifest import Manifest, ManifestError
 from space_agents.platform.appearance import open_in_file_manager
 from space_agents.runtime.dummy import dummy_reply
+from space_agents.runtime.loop import AgentRunner
+from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.settings import UserSettings
 from space_agents.store import NotFound, Store
 
@@ -48,7 +53,7 @@ def endpoint(fn: Callable[..., Any]) -> Callable[..., dict[str, Any]]:
             return {"ok": False, "error": "Please fix the highlighted fields.", "fields": e.errors}
         except NotFound as e:
             return {"ok": False, "error": f"Not found: {e.args[0]}"}
-        except (UserError, ValueError) as e:
+        except (UserError, ChangeError, ValueError) as e:
             return {"ok": False, "error": str(e)}
         except Exception:
             log.exception("API call %s failed", fn.__name__)
@@ -76,6 +81,9 @@ class Api:
         settings: UserSettings,
         core: Core,
         events: EventBus,
+        sandbox: PyodideSandbox,
+        runner: AgentRunner,
+        changes: ChangeManager,
         on_ui_ready: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._config = config
@@ -84,9 +92,13 @@ class Api:
         self._settings = settings
         self._core = core
         self._events = events
+        self._sandbox = sandbox
+        self._runner = runner
+        self._changes = changes
         self._on_ui_ready = on_ui_ready
         self._window: webview.Window | None = None
         self._busy: set[str] = set()
+        self._tasks: dict[str, concurrent.futures.Future] = {}
 
     def _attach_window(self, window: webview.Window) -> None:
         self._window = window
@@ -105,6 +117,7 @@ class Api:
             self._events.attach(
                 lambda payload: window.run_js(f"window.__spaceEvents && window.__spaceEvents({payload})")
             )
+            self._sandbox.attach(window.run_js)
         log.info("UI ready: %s", info or {})
         if self._on_ui_ready:
             self._on_ui_ready(info or {})
@@ -123,6 +136,10 @@ class Api:
             "templates": load_templates(paths.templates_dir()),
             "catalog": load_catalog_file(self._config.catalog_file),
             "models": self._config.models,
+            "llm": {
+                "ready": self._config.llm_ready,
+                "default_model": self._config.models[0] if self._config.models else "",
+            },
         }
 
     # --- agents -------------------------------------------------------------------------------------------------
@@ -179,7 +196,13 @@ class Api:
 
     @endpoint
     def list_messages(self, agent_id: str) -> list[dict[str, Any]]:
-        return self._store.list_messages(agent_id)
+        messages = self._store.list_messages(agent_id)
+        ids = [m["id"] for m in messages if m["role"] == "agent"]
+        calls, changes = self._runner.tool_calls_for(ids), self._changes.for_messages(ids)
+        for m in messages:
+            m["tool_calls"] = calls.get(m["id"], [])
+            m["changes"] = changes.get(m["id"], [])
+        return messages
 
     @endpoint
     def send_message(self, agent_id: str, text: str) -> dict[str, Any]:
@@ -194,10 +217,58 @@ class Api:
 
         user_msg = self._store.add_message(agent_id, "user", text)
         reply = self._store.add_message(agent_id, "agent", "", status="streaming")
+        reply["tool_calls"], reply["changes"] = [], []
         self._busy.add(agent_id)
-        future = self._core.submit(dummy_reply(self._store, self._events, agent, text, reply["id"]))
-        future.add_done_callback(lambda _f: self._busy.discard(agent_id))
+        if self._config.llm_ready:
+            future = self._core.submit(self._runner.chat(agent, reply["id"]))
+        else:  # no model configured: placeholder replies so the UI can still be exercised
+            future = self._core.submit(dummy_reply(self._store, self._events, agent, text, reply["id"]))
+        self._tasks[agent_id] = future
+
+        def finished(_f: concurrent.futures.Future) -> None:
+            self._busy.discard(agent_id)
+            self._tasks.pop(agent_id, None)
+
+        future.add_done_callback(finished)
         return {"user_message": user_msg, "agent_message": reply}
+
+    @endpoint
+    def stop_agent(self, agent_id: str) -> bool:
+        future = self._tasks.get(agent_id)
+        return bool(future and future.cancel())
+
+    # --- proposed changes -------------------------------------------------------------------------------------
+
+    @endpoint
+    def apply_change(self, change_id: str, force: bool = False) -> dict[str, Any]:
+        return self._changes.apply(change_id, force=bool(force))
+
+    @endpoint
+    def discard_change(self, change_id: str) -> dict[str, Any]:
+        return self._changes.discard(change_id)
+
+    @endpoint
+    def undo_change(self, change_id: str) -> dict[str, Any]:
+        return self._changes.undo(change_id)
+
+    @endpoint
+    def reveal_change(self, change_id: str) -> None:
+        path = self._changes.target_path(change_id)
+        if not path.exists():
+            raise UserError("That file no longer exists.")
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        else:
+            open_in_file_manager(str(path.parent))
+
+    # --- sandbox ------------------------------------------------------------------------------------------------
+
+    @endpoint
+    def sandbox_done(self, run_id: str, result: dict[str, Any]) -> None:
+        """Called by ui/js/sandbox.js when the Pyodide worker finishes a run."""
+        self._sandbox.complete(str(run_id), result)
 
     # --- files --------------------------------------------------------------------------------------------------
 
@@ -221,6 +292,7 @@ class Api:
     def save_endpoint_overrides(self, overrides: dict[str, str]) -> list[dict[str, Any]]:
         self._settings.set_overrides(overrides or {})
         self._config = self._reload_config()
+        self._runner.config = self._config
         return self._config.describe()
 
     @endpoint

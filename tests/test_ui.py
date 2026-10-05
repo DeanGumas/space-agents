@@ -44,7 +44,10 @@ def test_icons_exist():
         src = js.read_text()
         names |= set(re.findall(r'Icon\} name="([a-z0-9-]+)"', src))
         names |= set(re.findall(r'icon: "([a-z0-9-]+)"', src))
-    names |= {"folder-pen", "folder", "circle-alert", "circle-check", "info"}  # used in expressions
+    names |= set(re.findall(r'^\s+\w+: "([a-z0-9-]+)",?$', src, re.M)) if "ICONS" in src else set()
+    # Icon names chosen inside expressions:
+    names |= {"folder-pen", "folder", "circle-alert", "circle-check", "info", "circle-x", "wrench", "chevron-up"}
+    names |= {"chevron-down", "file-spreadsheet", "file", "square", "send-horizontal"}
     missing = sorted(n for n in names if not (UI / "vendor" / "lucide" / f"{n}.svg").is_file())
     assert not missing, missing
 

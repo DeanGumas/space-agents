@@ -18,7 +18,7 @@ const TABS = [
   { id: "instructions", label: "Instructions", icon: "file-text", owns: ["instructions"] },
   { id: "model", label: "Model", icon: "cpu", owns: ["model"] },
   { id: "sources", label: "Data sources", icon: "server", owns: ["mcp_servers"] },
-  { id: "files", label: "Files & folders", icon: "folder", owns: ["filesystem"] },
+  { id: "files", label: "Files & folders", icon: "folder", owns: ["filesystem", "file_changes"] },
   { id: "schedule", label: "Schedule", icon: "clock", owns: ["schedule", "task", "notifications"] },
   { id: "advanced", label: "Advanced", icon: "sliders-horizontal", owns: ["limits", "permissions", "memory", "id", ""] },
 ];
@@ -288,9 +288,9 @@ function SourcesTab({ draft, set, err }) {
               <span class="server-icon"><${Icon} name="file-scan" /></span>
               <div class="text">
                 <div class="title">${docServer.name}</div>
-                <div class="desc">Lets the agent read PDFs, Office files, and scans. Always on.</div>
+                <div class="desc">GPU conversion for scans, images, and tricky layouts. Everyday PDFs and Office files are read locally. Always available.</div>
               </div>
-              <span class="chip success">Always on</span>
+              <span class="chip success">Always available</span>
             </div>
           </div>`}
           ${servers.map((s) => {
@@ -407,8 +407,32 @@ function FilesTab({ draft, set, err }) {
             </div>`,
           )}
         </div>`}
-    <div style=${{ marginTop: "12px" }}>
+    <div style=${{ marginTop: "12px", marginBottom: "24px" }}>
       <button class="btn" onClick=${add}><${Icon} name="folder-plus" /> Add folder…</button>
+    </div>
+    <h3>When the agent saves files</h3>
+    <p class="lead">Applies to Read & write folders. Agents can never delete files, and every overwrite can be undone.</p>
+    <div class="row">
+      <${Field} label="New files" error=${err("file_changes.new_files")}>
+        <select
+          class="input"
+          value=${draft.file_changes.new_files}
+          onChange=${(e) => set("file_changes.new_files", e.currentTarget.value)}
+        >
+          <option value="allow">Save automatically</option>
+          <option value="ask">Ask me first</option>
+        </select>
+      <//>
+      <${Field} label="Changes to existing files" error=${err("file_changes.existing_files")}>
+        <select
+          class="input"
+          value=${draft.file_changes.existing_files}
+          onChange=${(e) => set("file_changes.existing_files", e.currentTarget.value)}
+        >
+          <option value="ask">Ask me first</option>
+          <option value="allow_with_backup">Apply automatically (keep a backup)</option>
+        </select>
+      <//>
     </div>
   `;
 }

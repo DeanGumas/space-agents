@@ -27,10 +27,13 @@ current value comes from `default` or `user`; a value from `.env`/env/CLI would 
 | `data_dir` | `SPACE_AGENTS_DATA_DIR` | path | Default: `~/Library/Application Support/SpaceAgents` or `%LOCALAPPDATA%\SpaceAgents` |
 | `debug` | `SPACE_AGENTS_DEBUG` | bool | `1/true/yes/on`: devtools + debug logging |
 | `catalog_file` | `SPACE_AGENTS_CATALOG_FILE` | path | **Dev only.** Offline catalog JSON used instead of `GET /mcp` |
-| `models` | `SPACE_AGENTS_MODELS` | list | **Dev only.** Comma-separated models used instead of `GET /models` |
+| `models` | `SPACE_AGENTS_MODELS` | list | Models offered in the editor; the first is the default for agents without one |
+| `api_key` | `SPACE_AGENTS_API_KEY` | secret | **Dev/test only.** Never shown in the UI (Settings shows "set"); moves to the OS keychain |
+| `reasoning_effort` | `SPACE_AGENTS_REASONING_EFFORT` | str | Default `low`; bounds reasoning tokens; dropped if a model rejects it |
 
 Behavior details:
-- URLs have trailing `/` stripped.
+- URLs have trailing `/` stripped. `llm_base_url` also accepts a full endpoint URL (`…/v1/chat/completions` →
+  `…/v1`).
 - Relative paths in `.env` resolve against the `.env` file's folder. Relative paths in env vars and the CLI resolve
   against the working directory.
 - Empty values are treated as unset.

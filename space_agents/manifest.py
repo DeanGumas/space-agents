@@ -17,6 +17,8 @@ WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 LEVELS = ("info", "action", "urgent")
 FOLDER_ACCESS = ("read", "read_write")
 EXTERNAL_ACTIONS = ("never", "ask", "allow")
+NEW_FILE_POLICIES = ("allow", "ask")
+EXISTING_FILE_POLICIES = ("ask", "allow_with_backup")
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -90,6 +92,14 @@ class Limits:
 
 
 @dataclass
+class FileChanges:
+    """How proposed file changes are applied inside read_write folders (PLAN.md §2.10). Deletes are never possible."""
+
+    new_files: str = "allow"
+    existing_files: str = "ask"
+
+
+@dataclass
 class Permissions:
     external_actions: str = "never"
 
@@ -105,6 +115,7 @@ class Manifest:
     model: ModelConfig = field(default_factory=ModelConfig)
     mcp_servers: list[ServerGrant] = field(default_factory=list)
     filesystem: list[FolderGrant] = field(default_factory=list)
+    file_changes: FileChanges = field(default_factory=FileChanges)
     schedule: Schedule = field(default_factory=Schedule)
     task: str = ""
     notifications: Notifications = field(default_factory=Notifications)
@@ -268,6 +279,12 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
         seen_paths.add(p)
         folders.append(FolderGrant(path=p, access=fr.choice("access", "read", FOLDER_ACCESS)))
 
+    fc = r.sub("file_changes")
+    file_changes = FileChanges(
+        new_files=fc.choice("new_files", "allow", NEW_FILE_POLICIES),
+        existing_files=fc.choice("existing_files", "ask", EXISTING_FILE_POLICIES),
+    )
+
     s = r.sub("schedule")
     h = s.sub("active_hours")
     hours = ActiveHours(start=h.str("start", "07:00", max_len=5), end=h.str("end", "18:00", max_len=5))
@@ -307,6 +324,7 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
         model=model,
         mcp_servers=servers,
         filesystem=folders,
+        file_changes=file_changes,
         schedule=schedule,
         task=task,
         notifications=Notifications(desktop=n.bool("desktop", True), min_level=n.choice("min_level", "action", LEVELS)),

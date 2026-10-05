@@ -11,6 +11,7 @@ truststore>=0.9               # use OS certificate store (corporate CAs)
 keyring>=25.0                 # API key in Windows Credential Manager / macOS Keychain
 tzdata                        # IANA timezone data for zoneinfo (Windows ships none)
 platformdirs>=4.0             # per-OS app data / log directories
+pypdfium2>=5.0                # fast local PDF text extraction (PDFium; Apache-2.0/BSD)
 
 # --- Runtime, maybe -------------------------------------------------------------
 jsonschema>=4.20              # validate tool-call arguments against MCP/OpenAPI schemas
@@ -28,6 +29,14 @@ respx>=0.21                   # mock httpx transports (fake LLM / MCP / OpenAPI 
 mcp>=1.9                      # official MCP SDK — dev only, to run a reference MCP server in tests
 uvicorn>=0.30                 # serve the reference MCP / fake OpenAPI server in integration tests
 starlette>=0.37
+
+# --- Dev: document fixtures ------------------------------------------------------
+# Generate test PDFs/Office files in tests. The app reads OOXML with the stdlib, and the
+# sandbox gets its own copies of these libraries via Pyodide (scripts/vendor.py).
+fpdf2>=2.8                    # create PDFs with real text layers
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=1.0
 
 # --- Dev: tooling ---------------------------------------------------------------
 ruff>=0.6                     # lint + format

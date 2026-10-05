@@ -126,6 +126,10 @@ function updateMessage(agentId, messageId, fn) {
   messages.value = { ...messages.value, [agentId]: list.map((m) => (m.id === messageId ? fn(m) : m)) };
 }
 
+function upsert(list = [], item) {
+  return list.some((x) => x.id === item.id) ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item];
+}
+
 function handleEvent(ev) {
   switch (ev.type) {
     case "message.delta":
@@ -133,7 +137,7 @@ function handleEvent(ev) {
       break;
     case "message.done": {
       const m = ev.message;
-      updateMessage(ev.agent_id, m.id, () => m);
+      updateMessage(ev.agent_id, m.id, (old) => ({ ...old, ...m })); // keep tool_calls / changes
       patchAgent(ev.agent_id, {
         last_message: { role: m.role, preview: m.content.slice(0, 160), created_at: m.created_at },
       });
@@ -144,11 +148,40 @@ function handleEvent(ev) {
     case "agent.status":
       patchAgent(ev.agent_id, { status: ev.status });
       break;
+    case "tool.started":
+    case "tool.done":
+      updateMessage(ev.agent_id, ev.message_id, (m) => ({ ...m, tool_calls: upsert(m.tool_calls, ev.call) }));
+      break;
+    case "change.updated":
+      updateMessage(ev.agent_id, ev.message_id, (m) => ({ ...m, changes: upsert(m.changes, ev.change) }));
+      break;
     default:
       console.debug("Unhandled event", ev);
   }
 }
 onEvent(handleEvent);
+
+export async function stopAgent(agentId) {
+  try {
+    await call("stop_agent", agentId);
+  } catch (e) {
+    toastError(e);
+  }
+}
+
+// ---------- proposed changes ----------
+
+/** action: "apply" | "discard" | "undo" | "reveal". The UI updates from the change.updated event. */
+export async function changeAction(action, change, force = false) {
+  try {
+    if (action === "apply") await call("apply_change", change.id, force);
+    else if (action === "discard") await call("discard_change", change.id);
+    else if (action === "undo") await call("undo_change", change.id);
+    else if (action === "reveal") await call("reveal_change", change.id);
+  } catch (e) {
+    toastError(e);
+  }
+}
 
 // ---------- dialogs ----------
 

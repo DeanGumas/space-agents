@@ -7,6 +7,7 @@ import { App } from "./app.js";
 import { init } from "./state.js";
 import { call, reportError } from "./api.js";
 import { applyTheme } from "./lib/theme.js";
+import "./sandbox.js"; // registers window.__sandbox (Pyodide worker manager)
 
 applyTheme("system"); // until the saved preference loads
 render(html`<${App} />`, document.getElementById("app"));
