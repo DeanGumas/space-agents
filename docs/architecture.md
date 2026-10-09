@@ -79,11 +79,11 @@ changes.
 | Area | Methods |
 |---|---|
 | Lifecycle | `ping`, `ui_ready`, `bootstrap` |
-| Agents | `list_agents`, `save_agent`, `delete_agent` |
+| Agents | `list_agents`, `save_agent`, `duplicate_agent`, `delete_agent` |
 | Chat | `list_messages` (with tool calls and changes), `send_message`, `stop_agent` |
 | Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
 | Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
-| Files & settings | `pick_folder`, `set_theme`, `save_endpoint_overrides`, `open_data_folder` |
+| Files & settings | `pick_folder`, `set_theme`, `set_ui_pref` (allow-listed keys, e.g. `sidebar_width`), `save_endpoint_overrides`, `open_data_folder` |
 
 ## Code map
 
@@ -94,7 +94,7 @@ space_agents/
   bridge.py      Api: every method the UI can call
   core.py        Core (asyncio thread) + EventBus (batched UI events)
   config.py      layered config resolution (see configuration.md)
-  settings.py    settings.json (theme, endpoint overrides); atomic JSON writes
+  settings.py    settings.json (theme, endpoint overrides, UI prefs); atomic JSON writes
   manifest.py    agent manifest dataclasses + validation (see agents.md)
   store.py       agents/*.json, avatars/*.png, space.db schema/migrations + query helpers
   catalog.py     tool-server catalog (dev file for now) + agent templates

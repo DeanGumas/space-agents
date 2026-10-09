@@ -191,3 +191,49 @@ def test_discard_with_feedback_tells_the_agent(env, tmp_path):
     another = _pending_change(api, tmp_path, "editor")
     assert api.discard_change(another["id"], "more")["ok"] is False
     assert api._changes.get(another["id"])["status"] == "pending"
+
+
+def test_clone_names():
+    from space_agents.bridge import clone_name
+
+    assert clone_name("PO Agent", {"PO Agent"}) == "PO Agent (Clone)"
+    assert clone_name("PO Agent", {"PO Agent", "PO Agent (Clone)"}) == "PO Agent (Clone 2)"
+    assert clone_name("PO Agent (Clone)", {"PO Agent", "PO Agent (Clone)"}) == "PO Agent (Clone 2)"  # no stacking
+    long = clone_name("x" * 60, set())
+    assert len(long) <= 60 and long.endswith(" (Clone)")
+
+
+def test_duplicate_agent_copies_setup_not_history(env):
+    api, _ = env
+    src = ok(
+        api.save_agent(
+            {
+                "name": "PO Agent",
+                "instructions": "Track POs.",
+                "model": {"name": "gpt-5-nano", "temperature": 0.3},
+                "avatar": {"emoji": None, "color": "#3b82f6", "image_data": PNG_URL},
+                "mcp_servers": [{"id": "costpoint", "tools": ["get_po"]}],
+                "filesystem": [{"path": "~/Documents", "access": "read_write"}],
+                "file_changes": {"new_files": "ask", "existing_files": "allow_with_backup"},
+            }
+        )
+    )
+    api._store.add_message(src["id"], "user", "hello")
+    clone = ok(api.duplicate_agent(src["id"]))
+    assert clone["name"] == "PO Agent (Clone)" and clone["id"] != src["id"]
+    for key in ("instructions", "model", "mcp_servers", "filesystem", "file_changes", "schedule", "limits"):
+        assert clone[key] == src[key], key
+    assert clone["avatar_url"] == src["avatar_url"] and clone["avatar"]["image"] == f"avatars/{clone['id']}.png"
+    assert clone["last_message"] is None and ok(api.list_messages(clone["id"])) == []
+    assert ok(api.duplicate_agent(src["id"]))["name"] == "PO Agent (Clone 2)"
+    assert api.duplicate_agent("nope")["ok"] is False
+
+
+def test_ui_prefs_are_validated_and_persisted(env, tmp_path):
+    api, _ = env
+    assert ok(api.set_ui_pref("sidebar_width", 330)) == 330
+    assert ok(api.set_ui_pref("sidebar_width", 9999)) == 480  # clamped
+    assert api.set_ui_pref("evil", 1)["ok"] is False
+    assert api.set_ui_pref("sidebar_width", "wide")["ok"] is False
+    assert UserSettings(tmp_path).ui == {"sidebar_width": 480}
+    assert ok(api.bootstrap())["ui"] == {"sidebar_width": 480}

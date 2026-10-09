@@ -47,7 +47,7 @@ def test_icons_exist():
     names |= set(re.findall(r'^\s+\w+: "([a-z0-9-]+)",?$', src, re.M)) if "ICONS" in src else set()
     # Icon names chosen inside expressions:
     names |= {"folder-pen", "folder", "circle-alert", "circle-check", "info", "circle-x", "wrench", "chevron-up"}
-    names |= {"chevron-down", "file-spreadsheet", "file", "square", "send-horizontal"}
+    names |= {"chevron-down", "file-spreadsheet", "file", "square", "send-horizontal", "copy", "pencil"}
     missing = sorted(n for n in names if not (UI / "vendor" / "lucide" / f"{n}.svg").is_file())
     assert not missing, missing
 

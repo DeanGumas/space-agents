@@ -15,6 +15,15 @@ export const unread = signal({}); // agentId -> count
 export const theme = signal("system");
 export const dialog = signal(null); // {kind: "new"} | {kind: "editor", agentId?, draft} | {kind: "settings"}
 export const toasts = signal([]);
+export const contextMenu = signal(null); // {x, y, title?, items: [{label, icon, onSelect} | {divider: true}]}
+
+// Sidebar width: draggable between SIDEBAR_MIN and SIDEBAR_MAX; narrower snaps to an icon-only rail.
+export const SIDEBAR_DEFAULT = 268;
+export const SIDEBAR_MIN = 200;
+export const SIDEBAR_MAX = 480;
+export const SIDEBAR_COMPACT = 72;
+export const sidebarWidth = signal(SIDEBAR_DEFAULT);
+let lastExpandedWidth = SIDEBAR_DEFAULT;
 
 export const selectedAgent = computed(() =>
   view.value.kind === "agent" ? agents.value.find((a) => a.id === view.value.id) || null : null,
@@ -42,6 +51,11 @@ export async function init() {
       boot.value = data;
       agents.value = data.agents;
       theme.value = data.theme;
+      const saved = data.ui?.sidebar_width;
+      if (saved) {
+        sidebarWidth.value = saved;
+        if (saved > SIDEBAR_COMPACT) lastExpandedWidth = saved;
+      }
       if (data.agents.length) view.value = { kind: "agent", id: data.agents[0].id };
     });
     applyTheme(data.theme);
@@ -194,6 +208,51 @@ export async function changeAction(action, change, force = false) {
     else if (action === "discard") await call("discard_change", change.id);
     else if (action === "undo") await call("undo_change", change.id);
     else if (action === "reveal") await call("reveal_change", change.id);
+  } catch (e) {
+    toastError(e);
+  }
+}
+
+// ---------- sidebar width ----------
+
+/** Pointer x → sidebar width: below the snap point it collapses to the icon rail. */
+export function sidebarWidthFor(x) {
+  if (x < 150) return SIDEBAR_COMPACT;
+  return Math.round(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, x)));
+}
+
+export function setSidebarWidth(width) {
+  sidebarWidth.value = width;
+  if (width > SIDEBAR_COMPACT) lastExpandedWidth = width;
+}
+
+export function saveSidebarWidth() {
+  call("set_ui_pref", "sidebar_width", sidebarWidth.value).catch(toastError);
+}
+
+export function toggleSidebar() {
+  setSidebarWidth(sidebarWidth.value <= SIDEBAR_COMPACT ? lastExpandedWidth : SIDEBAR_COMPACT);
+  saveSidebarWidth();
+}
+
+// ---------- context menu ----------
+
+export function openContextMenu(event, menu) {
+  event.preventDefault();
+  event.stopPropagation();
+  contextMenu.value = { x: event.clientX, y: event.clientY, ...menu };
+}
+
+export function closeContextMenu() {
+  contextMenu.value = null;
+}
+
+export async function duplicateAgent(id) {
+  try {
+    const clone = await call("duplicate_agent", id);
+    upsertAgent(clone);
+    await selectAgent(clone.id);
+    toast(`Created ${clone.name}`, "success");
   } catch (e) {
     toastError(e);
   }

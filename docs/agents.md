@@ -34,7 +34,7 @@ on the tab that owns it.
   space.db             messages, tool calls, proposed changes, file versions, document cache (architecture.md)
   staging/, history/   proposed-change files and previous versions (documents-and-sandbox.md)
   workspaces/          per-run sandbox folders (temporary)
-  settings.json        theme + endpoint overrides
+  settings.json        theme, endpoint overrides, UI prefs (sidebar width)
   logs/                when the data dir is overridden
 ```
 
@@ -51,6 +51,12 @@ Priority: **picture → emoji → initials**, drawn on `avatar.color`.
   (≤ 512 KB) and saves `avatars/<id>.png`. No image library is needed in Python.
 - **On edit,** the UI sends `avatar.keep_image: true` to keep the existing picture. Omitting both fields removes it.
 - **On read,** the bridge returns `avatar_url` as a data URL. Paths are confined to `avatars/`.
+
+## Duplicating
+
+Right-click an agent → **Duplicate** (`bridge.duplicate_agent`) copies the whole manifest (instructions, model,
+data sources, folders, file-change policy, schedule, limits) and its avatar picture into a new agent. Chat history is
+not copied. Names go "PO Agent (Clone)", then "(Clone 2)", …; cloning a clone doesn't stack suffixes.
 
 ## Templates
 

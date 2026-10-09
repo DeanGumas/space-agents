@@ -14,6 +14,7 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import logging
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -60,6 +61,18 @@ def endpoint(fn: Callable[..., Any]) -> Callable[..., dict[str, Any]]:
             return {"ok": False, "error": "Something went wrong. Details are in the log."}
 
     return wrapper
+
+
+def clone_name(name: str, existing: set[str], limit: int = 60) -> str:
+    """'PO Agent' → 'PO Agent (Clone)', then '(Clone 2)'…; cloning a clone doesn't stack suffixes."""
+    base = re.sub(r" \(Clone(?: \d+)?\)$", "", name).strip() or "Agent"
+    n = 1
+    while True:
+        suffix = " (Clone)" if n == 1 else f" (Clone {n})"
+        candidate = base[: limit - len(suffix)].rstrip() + suffix
+        if candidate not in existing:
+            return candidate
+        n += 1
 
 
 def to_display_path(path: str) -> str:
@@ -129,6 +142,7 @@ class Api:
             "version": __version__,
             "platform": sys.platform,
             "theme": self._settings.theme,
+            "ui": self._settings.ui,
             "config": self._config.describe(),
             "data_dir": str(self._config.data_dir),
             "agents": self._agent_views(),
@@ -185,6 +199,17 @@ class Api:
         png = Store.decode_png_data_url(image_data) if image_data else None
         saved = self._store.save_agent(manifest, png)
         return self._agent_view(saved, self._store.last_messages().get(saved.id))
+
+    @endpoint
+    def duplicate_agent(self, agent_id: str) -> dict[str, Any]:
+        """Copy an agent's whole setup (not its chat history) as "<name> (Clone)", "(Clone 2)", …"""
+        source = self._store.get_agent(agent_id)
+        clone = Manifest.from_dict(source.to_dict())
+        clone.id = ""
+        clone.name = clone_name(source.name, {m.name for m in self._store.list_agents()})
+        clone.avatar.image = None
+        saved = self._store.save_agent(clone, self._store.avatar_bytes(source))
+        return self._agent_view(saved, None)
 
     @endpoint
     def delete_agent(self, agent_id: str) -> None:
@@ -296,6 +321,11 @@ class Api:
         return {"path": to_display_path(result[0])}
 
     # --- settings -----------------------------------------------------------------------------------------------
+
+    @endpoint
+    def set_ui_pref(self, key: str, value: Any) -> Any:
+        """Persist a small UI preference (e.g. sidebar width). Unknown keys and bad values are rejected/clamped."""
+        return self._settings.set_ui(str(key), value)
 
     @endpoint
     def set_theme(self, theme: str) -> str:

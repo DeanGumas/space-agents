@@ -1,14 +1,37 @@
 import { html } from "htm/preact";
 import { Avatar, Icon, Logo } from "../components/common.js";
-import { agents, boot, view, unread, theme, selectAgent, showActivity, openNewAgent, openSettings, setTheme } from "../state.js";
+import {
+  agents,
+  boot,
+  view,
+  unread,
+  theme,
+  selectAgent,
+  showActivity,
+  openNewAgent,
+  openSettings,
+  setTheme,
+  sidebarWidth,
+  sidebarWidthFor,
+  setSidebarWidth,
+  saveSidebarWidth,
+  SIDEBAR_COMPACT,
+  SIDEBAR_DEFAULT,
+  openContextMenu,
+  openEditor,
+  duplicateAgent,
+} from "../state.js";
+import { toDraft } from "./AgentEditor.js";
 import { THEMES } from "../lib/theme.js";
 import { cx, relativeTime, scheduleSummary } from "../lib/util.js";
 
 export function Sidebar() {
   const current = view.value;
   const list = agents.value;
+  const compact = sidebarWidth.value <= SIDEBAR_COMPACT;
   return html`
-    <aside class="sidebar">
+    <aside class=${cx("sidebar", compact && "compact")}>
+      <${Resizer} />
       <div class="sidebar-header">
         <${Logo} />
         <span class="title">Space Agents</span>
@@ -18,7 +41,11 @@ export function Sidebar() {
       </div>
 
       <div class="sidebar-scroll">
-        <button class=${cx("nav-item", current.kind === "activity" && "active")} onClick=${showActivity}>
+        <button
+          class=${cx("nav-item", current.kind === "activity" && "active")}
+          onClick=${showActivity}
+          title=${compact ? "Activity" : undefined}
+        >
           <${Icon} name="inbox" />
           <span class="label">Activity</span>
           <span class="soon">Soon</span>
@@ -38,12 +65,13 @@ export function Sidebar() {
             agent=${a}
             active=${current.kind === "agent" && current.id === a.id}
             unreadCount=${unread.value[a.id] || 0}
+            compact=${compact}
           />`,
         )}
 
-        <button class="new-agent-btn" onClick=${openNewAgent}>
+        <button class="new-agent-btn" onClick=${openNewAgent} title=${compact ? "Add an agent" : undefined}>
           <span class="plus"><${Icon} name="plus" size="sm" /></span>
-          <span>Add an agent</span>
+          <span class="label">Add an agent</span>
         </button>
       </div>
 
@@ -58,7 +86,7 @@ export function Sidebar() {
   `;
 }
 
-function AgentRow({ agent, active, unreadCount }) {
+function AgentRow({ agent, active, unreadCount, compact }) {
   const busy = agent.status === "responding";
   const last = agent.last_message;
   const preview = busy
@@ -70,7 +98,15 @@ function AgentRow({ agent, active, unreadCount }) {
     <button
       class=${cx("agent-row", active && "active", unreadCount > 0 && "unread")}
       onClick=${() => selectAgent(agent.id)}
-      title=${last ? `Last activity ${relativeTime(last.created_at)}` : agent.name}
+      onContextMenu=${(e) =>
+        openContextMenu(e, {
+          title: agent.name,
+          items: [
+            { label: "Edit agent", icon: "pencil", onSelect: () => openEditor(toDraft(agent), agent.id) },
+            { label: "Duplicate", icon: "copy", onSelect: () => duplicateAgent(agent.id) },
+          ],
+        })}
+      title=${compact ? agent.name : last ? `Last activity ${relativeTime(last.created_at)}` : agent.name}
     >
       <${Avatar} agent=${agent} size=${32} />
       <span class="meta">
@@ -83,6 +119,41 @@ function AgentRow({ agent, active, unreadCount }) {
       </span>
     </button>
   `;
+}
+
+// Drag handle on the sidebar's right edge. Double-click resets the width; Ctrl/⌘ B toggles the icon rail.
+function Resizer() {
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    try {
+      handle.setPointerCapture(e.pointerId); // keep receiving moves when the pointer leaves the thin handle
+    } catch {
+      // not an active pointer (e.g. synthetic events); dragging still works while over the handle
+    }
+    document.body.classList.add("resizing");
+    const move = (ev) => setSidebarWidth(sidebarWidthFor(ev.clientX));
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      document.body.classList.remove("resizing");
+      saveSidebarWidth();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up, { once: true });
+    handle.addEventListener("pointercancel", up, { once: true });
+  };
+  return html`<div
+    class="sidebar-resizer"
+    role="separator"
+    aria-orientation="vertical"
+    title="Drag to resize · double-click to reset · Ctrl/⌘ B to collapse"
+    onPointerDown=${onPointerDown}
+    onDblClick=${() => {
+      setSidebarWidth(SIDEBAR_DEFAULT);
+      saveSidebarWidth();
+    }}
+  ></div>`;
 }
 
 function ConnectionStatus() {

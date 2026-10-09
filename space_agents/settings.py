@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -15,6 +16,9 @@ THEMES = ("system", "light", "dark")
 
 # Endpoint settings a user may override from Settings → Advanced.
 USER_OVERRIDABLE = ("llm_base_url", "mcp_base_url")
+
+# UI preferences the window may persist: key -> (min, max) for ints. Anything else is rejected.
+UI_PREFS = {"sidebar_width": (72, 480)}
 
 
 def write_json_atomic(path: Path, data: Any) -> None:
@@ -36,6 +40,7 @@ class UserSettings:
         self.path = data_dir / "settings.json"
         self.theme = "system"
         self.overrides: dict[str, str] = {}
+        self.ui: dict[str, int] = {}
         self._load()
 
     def _load(self) -> None:
@@ -50,9 +55,24 @@ class UserSettings:
             self.theme = raw["theme"]
         overrides = raw.get("overrides") or {}
         self.overrides = {k: str(v) for k, v in overrides.items() if k in USER_OVERRIDABLE and v}
+        for key, value in (raw.get("ui") or {}).items():
+            with contextlib.suppress(ValueError):  # drop unknown/invalid prefs from older versions
+                self.ui[key] = self._check_ui(key, value)
 
     def save(self) -> None:
-        write_json_atomic(self.path, {"theme": self.theme, "overrides": self.overrides})
+        write_json_atomic(self.path, {"theme": self.theme, "overrides": self.overrides, "ui": self.ui})
+
+    @staticmethod
+    def _check_ui(key: str, value: object) -> int:
+        if key not in UI_PREFS or not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Unknown UI preference {key!r}")
+        lo, hi = UI_PREFS[key]
+        return max(lo, min(hi, value))
+
+    def set_ui(self, key: str, value: object) -> int:
+        self.ui[key] = self._check_ui(key, value)
+        self.save()
+        return self.ui[key]
 
     def set_theme(self, theme: str) -> None:
         if theme not in THEMES:

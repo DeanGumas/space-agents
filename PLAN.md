@@ -200,6 +200,8 @@ Layout (Slack-style):
 
 - **Sidebar:** agent avatar (emoji or initials + color), name, status dot (idle / running / error / paused),
   last-activity snippet and relative time, unread badge. "Activity" is a cross-agent inbox of notifications.
+  - ✅ **Resizable:** drag the edge, snap to an icon-only rail, Ctrl/⌘ B toggle; the width is remembered.
+  - ✅ **Right-click an agent:** Edit agent, or Duplicate (copies its setup as "<name> (Clone)").
 - **Channel view:** a single timeline mixing chat messages and run-report cards. Tool calls are collapsed by default
   ("▸ 6 tool calls") and expand to show server/tool, arguments, duration, and a truncated result.
 - **Agent settings drawer:** form-based manifest editor (Basics, Instructions, Model, Data sources, Files, Schedule,

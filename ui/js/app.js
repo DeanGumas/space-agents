@@ -1,12 +1,23 @@
 import { html } from "htm/preact";
 import { useEffect } from "preact/hooks";
 import { Toasts } from "./components/common.js";
+import { ContextMenu } from "./components/ContextMenu.js";
 import { Sidebar } from "./views/Sidebar.js";
 import { Channel } from "./views/Channel.js";
 import { AgentEditor } from "./views/AgentEditor.js";
 import { SettingsDialog } from "./views/SettingsDialog.js";
 import { Welcome, NewAgentDialog, Activity } from "./views/Welcome.js";
-import { boot, bootError, view, dialog, selectedAgent, openNewAgent, openSettings } from "./state.js";
+import {
+  boot,
+  bootError,
+  view,
+  dialog,
+  selectedAgent,
+  openNewAgent,
+  openSettings,
+  sidebarWidth,
+  toggleSidebar,
+} from "./state.js";
 
 export function App() {
   useEffect(() => {
@@ -19,6 +30,9 @@ export function App() {
       } else if (e.key === ",") {
         e.preventDefault();
         openSettings();
+      } else if (e.key === "b") {
+        e.preventDefault();
+        toggleSidebar();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -39,13 +53,14 @@ export function App() {
   else main = html`<${Welcome} />`;
 
   return html`
-    <div class="app">
+    <div class="app" style=${{ "--sidebar-w": `${sidebarWidth.value}px` }}>
       <${Sidebar} />
       ${main}
     </div>
     ${d?.kind === "new" && html`<${NewAgentDialog} />`}
     ${d?.kind === "editor" && html`<${AgentEditor} key=${d.agentId || "new"} agentId=${d.agentId} draft=${d.draft} tab=${d.tab} />`}
     ${d?.kind === "settings" && html`<${SettingsDialog} />`}
+    <${ContextMenu} />
     <${Toasts} />
   `;
 }

@@ -225,13 +225,17 @@ class Store:
         path.write_bytes(png)
         return f"avatars/{agent_id}.png"
 
-    def avatar_data_url(self, manifest: Manifest) -> str | None:
+    def avatar_bytes(self, manifest: Manifest) -> bytes | None:
         if not manifest.avatar.image:
             return None
         path = (self.data_dir / manifest.avatar.image).resolve()
         if path.parent != self.avatars_dir.resolve() or not path.is_file():
             return None
-        return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+        return path.read_bytes()
+
+    def avatar_data_url(self, manifest: Manifest) -> str | None:
+        data = self.avatar_bytes(manifest)
+        return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else None
 
     @staticmethod
     def decode_png_data_url(data_url: str) -> bytes:

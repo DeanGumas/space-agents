@@ -1631,3 +1631,146 @@ pre.text-diff {
   margin-top: 6px;
   font-size: 12px;
 }
+
+/* ---------- Resizable sidebar ---------- */
+
+.sidebar {
+  position: relative;
+}
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 5;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.sidebar-resizer:hover::after,
+body.resizing .sidebar-resizer::after {
+  background: var(--accent);
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.resizing .main {
+  pointer-events: none; /* keep text from being selected while dragging */
+}
+
+/* Compact: an icon-only rail (drag the sidebar narrow, or Ctrl/⌘ B). */
+.sidebar.compact .sidebar-header {
+  justify-content: center;
+  padding: 0;
+}
+.sidebar.compact .sidebar-header .title,
+.sidebar.compact .sidebar-header .btn,
+.sidebar.compact .nav-item .label,
+.sidebar.compact .nav-item .soon,
+.sidebar.compact .section-title,
+.sidebar.compact .sidebar-empty,
+.sidebar.compact .agent-row .meta,
+.sidebar.compact .new-agent-btn .label,
+.sidebar.compact .conn span:not(.dot) {
+  display: none;
+}
+.sidebar.compact .sidebar-scroll {
+  padding: 10px 6px;
+}
+.sidebar.compact .nav-item,
+.sidebar.compact .agent-row,
+.sidebar.compact .new-agent-btn {
+  justify-content: center;
+  padding: 6px 0;
+}
+.sidebar.compact .nav-item {
+  margin-bottom: 8px;
+}
+.sidebar.compact .agent-row {
+  position: relative;
+  margin-bottom: 2px;
+}
+.sidebar.compact .agent-row .side {
+  position: absolute;
+  top: 1px;
+  right: 4px;
+}
+.sidebar.compact .agent-row .badge {
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 16px;
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+}
+.sidebar.compact .sidebar-footer {
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+}
+.sidebar.compact .sidebar-footer .conn {
+  flex: none;
+  justify-content: center;
+}
+
+/* ---------- Context menu ---------- */
+
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.1s ease-out;
+}
+.cm-title {
+  overflow: hidden;
+  max-width: 260px;
+  padding: 4px 10px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.cm-item:hover,
+.cm-item:focus-visible {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: none;
+}
+.cm-item.danger {
+  color: var(--danger);
+}
+.cm-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}

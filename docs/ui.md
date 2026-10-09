@@ -16,7 +16,8 @@ ui/
   js/sandbox.js           main-thread side of the Pyodide sandbox: owns the Web Worker, validates its messages
   js/views/               Sidebar, Channel (header/timeline/composer), AgentEditor, SettingsDialog, Welcome
   js/components/          common.js (Icon, Avatar, Modal, Field, Switch…), AvatarPicker.js,
-                          Activity.js (activity steps, change cards, the Discard feedback box)
+                          Activity.js (activity steps, change cards, the Discard feedback box),
+                          ContextMenu.js (right-click menus)
   js/lib/                 theme, markdown (marked + DOMPurify), emoji list, util (paths, time)
   vendor/                 pinned third-party files + lucide/ icons + licenses (see scripts/vendor.py)
   sandbox/worker.js       the Pyodide Web Worker (see documents-and-sandbox.md)
@@ -48,6 +49,19 @@ Local UI state (form drafts, open/closed toggles) uses `useState`.
 
 The **agent editor** edits a draft copy and saves through `saveAgent()`. A failed save puts `ApiError.fields` into
 the editor's `errors` and jumps to the first tab with an error. Closing with unsaved changes asks for confirmation.
+
+## Sidebar and menus
+
+- **Resizable sidebar:**
+  - Drag its right edge (200–480 px); double-click the edge to reset.
+  - Drag below ~150 px and it snaps to a 72 px **icon rail**: avatars only, unread badges, names as tooltips.
+  - **Ctrl/⌘ B** toggles between the rail and the last width.
+  - The width lives in the `sidebarWidth` signal, which sets `--sidebar-w` on `.app`. It's persisted with
+    `call("set_ui_pref", "sidebar_width", px)` into `settings.json` → `ui`, and restored from `bootstrap().ui`.
+- **Context menus:** call `openContextMenu(event, {title, items})` from state.js. `<ContextMenu>` in `app.js` renders
+  one menu at a time, keeps it on screen, supports arrow keys and Escape, and closes on outside click, scroll, or
+  resize. Right-clicking an agent offers **Edit agent** and **Duplicate**.
+- **Keyboard shortcuts:** Ctrl/⌘ N new agent · Ctrl/⌘ , settings · Ctrl/⌘ B collapse sidebar.
 
 ## Theming
 
