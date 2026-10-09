@@ -1,8 +1,8 @@
 """Tool-server catalog and agent templates.
 
-Phase 0 reads the catalog from a local JSON file (SPACE_AGENTS_CATALOG_FILE) so the UI can be built and tested
-offline. Phase 2 adds fetching GET {mcp_base_url}/mcp with the user's key; the response format is the same
-(PLAN.md §2.6).
+For now the catalog comes from a local JSON file (SPACE_AGENTS_CATALOG_FILE, e.g. dev/catalog.json) so the UI can be
+built and tested offline. Phase 2a adds fetching GET {mcp_base_url}/mcp with the user's key; the response format is the
+same (PLAN.md §2.6).
 """
 
 from __future__ import annotations

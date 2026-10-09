@@ -213,8 +213,11 @@ class Api:
             raise UserError(f"Message is too long (max {MAX_MESSAGE_CHARS:,} characters).")
         if agent_id in self._busy:
             raise UserError("This agent is still responding.")
-        agent = self._store.get_agent(agent_id)
+        return self._start_reply(self._store.get_agent(agent_id), text)
 
+    def _start_reply(self, agent: Manifest, text: str) -> dict[str, Any]:
+        """Store the user's message and start the agent's reply in the background."""
+        agent_id = agent.id
         user_msg = self._store.add_message(agent_id, "user", text)
         reply = self._store.add_message(agent_id, "agent", "", status="streaming")
         reply["tool_calls"], reply["changes"] = [], []
@@ -244,8 +247,19 @@ class Api:
         return self._changes.apply(change_id, force=bool(force))
 
     @endpoint
-    def discard_change(self, change_id: str) -> dict[str, Any]:
-        return self._changes.discard(change_id)
+    def discard_change(self, change_id: str, feedback: str = "") -> dict[str, Any]:
+        """Discard a proposed change. With feedback, also tell the agent what to do differently (it replies)."""
+        feedback = (feedback or "").strip()
+        if len(feedback) > MAX_MESSAGE_CHARS:
+            raise UserError(f"Feedback is too long (max {MAX_MESSAGE_CHARS:,} characters).")
+        agent_id = self._changes.get(change_id)["agent_id"]
+        if feedback and agent_id in self._busy:
+            raise UserError("The agent is still responding. Try again when it's done.")
+        change = self._changes.discard(change_id)
+        if not feedback:
+            return {"change": change}
+        text = f"I discarded your proposed change to {change['name']}. Here's what should be different:\n\n{feedback}"
+        return {"change": change, **self._start_reply(self._store.get_agent(agent_id), text)}
 
     @endpoint
     def undo_change(self, change_id: str) -> dict[str, Any]:

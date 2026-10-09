@@ -13,10 +13,13 @@ ui/
   js/api.js               call() wrapper, ApiError, event fan-out, JS error capture
   js/state.js             signals + actions (agents, messages, dialogs, toasts, theme)
   js/app.js               layout + dialogs + keyboard shortcuts
+  js/sandbox.js           main-thread side of the Pyodide sandbox: owns the Web Worker, validates its messages
   js/views/               Sidebar, Channel (header/timeline/composer), AgentEditor, SettingsDialog, Welcome
-  js/components/          common.js (Icon, Avatar, Modal, Field, Switch…), AvatarPicker.js
+  js/components/          common.js (Icon, Avatar, Modal, Field, Switch…), AvatarPicker.js,
+                          Activity.js (activity steps, change cards, the Discard feedback box)
   js/lib/                 theme, markdown (marked + DOMPurify), emoji list, util (paths, time)
   vendor/                 pinned third-party files + lucide/ icons + licenses (see scripts/vendor.py)
+  sandbox/worker.js       the Pyodide Web Worker (see documents-and-sandbox.md)
   img/logo.svg
 ```
 
@@ -39,6 +42,10 @@ flows one way:
 
 Local UI state (form drafts, open/closed toggles) uses `useState`.
 
+**Agent replies** render, in order: activity steps (`tool_calls`), the Markdown answer, and change cards
+(`changes`). Both lists come with `list_messages` and are kept live by the `tool.started`/`tool.done` and
+`change.updated` events. While an agent is responding, the composer's Send button becomes **Stop**.
+
 The **agent editor** edits a draft copy and saves through `saveAgent()`. A failed save puts `ApiError.fields` into
 the editor's `errors` and jumps to the first tab with an error. Closing with unsaved changes asks for confirmation.
 
@@ -60,19 +67,23 @@ packaging.
 
 ## Security (CSP and sanitizing)
 
-- **CSP** (in `index.html`): no remote origins. No inline scripts except the import map, which is pinned by SHA-256
-  (`scripts/update_csp.py`). `'unsafe-eval'` is needed because pywebview's injected bridge builds API stubs with
-  `new Function`.
+- **Page CSP** (in `index.html`): no remote origins. No inline scripts except the import map, which is pinned by
+  SHA-256 (`scripts/update_csp.py`). `'unsafe-eval'` is needed because pywebview's injected bridge builds API stubs
+  with `new Function`. `worker-src 'self'` allows the sandbox worker.
+- **Worker CSP:** the sandbox worker gets its own policy as an HTTP header from `server.py`: `connect-src 'self'` (no
+  network) and `'wasm-unsafe-eval'`. Don't add `worker-src 'none'` there; WebKit then blocks the worker's own
+  imports.
 - **Sanitizing:** all model/agent output is rendered through `renderMarkdown()` (marked → DOMPurify). Never inject
   agent text any other way. Links get `target=_blank`, which pywebview opens in the system browser.
-- **Static file server:** pywebview serves `ui/` from `127.0.0.1` because ES modules can't load from `file://`. It
-  serves static files only; all app actions go through the bridge.
+- **Local server:** our WSGI app (`server.py`) serves `ui/` on `127.0.0.1`, because ES modules can't load from
+  `file://`. Besides static files it only has the sandbox's token-scoped `/workspace/…` routes. All app actions go
+  through the bridge.
 
 ## Conventions
 
 - **Styles:** use tokens, never raw colors.
 - **Avatars and icons:** use the `Avatar` and `Icon` components.
-- **Errors:** show them with `toast`/`toastError`. Don't use `alert`/`confirm` (unreliable in webviews); use inline
-  two-step confirms like the delete button.
+- **Errors:** show them with `toast`/`toastError`. Don't use `alert`/`confirm`/`prompt` (unreliable in webviews);
+  use inline UI like the delete button's two-step confirm or the change card's Discard box.
 - **Wording:** user-facing copy is written for non-technical users, e.g. "Creativity" rather than "temperature",
   and "Data sources" rather than "MCP servers".

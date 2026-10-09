@@ -149,3 +149,45 @@ def test_to_display_path(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     (tmp_path / "Documents").mkdir()
     assert to_display_path(str(tmp_path / "Documents")) == "~/Documents"
+
+
+def _pending_change(api, tmp_path, agent_id):
+    from space_agents.manifest import FileChanges
+
+    target = tmp_path / "tracker.csv"
+    target.write_text("v1")
+    staged = tmp_path / "staged.csv"
+    staged.write_text("v2")
+    return api._changes.propose(
+        agent_id=agent_id,
+        message_id=None,
+        tool_call_id=None,
+        target=target,
+        source=staged,
+        summary={"description": "update"},
+        policy=FileChanges(),
+    )
+
+
+def test_discard_without_feedback_just_discards(env, tmp_path):
+    api, _ = env
+    ok(api.save_agent({"name": "Editor"}))
+    change = _pending_change(api, tmp_path, "editor")
+    res = ok(api.discard_change(change["id"]))
+    assert res["change"]["status"] == "discarded" and "user_message" not in res
+    assert (tmp_path / "tracker.csv").read_text() == "v1"
+
+
+def test_discard_with_feedback_tells_the_agent(env, tmp_path):
+    api, delivered = env
+    ok(api.save_agent({"name": "Editor"}))
+    change = _pending_change(api, tmp_path, "editor")
+    res = ok(api.discard_change(change["id"], "  Use 'Late' instead of 'Delayed'.  "))
+    assert res["change"]["status"] == "discarded"
+    assert res["user_message"]["content"].endswith("Use 'Late' instead of 'Delayed'.")
+    assert "tracker.csv" in res["user_message"]["content"]
+    assert res["agent_message"]["status"] == "streaming"
+    # While the agent replies, more feedback is refused (and nothing is discarded by the failed call).
+    another = _pending_change(api, tmp_path, "editor")
+    assert api.discard_change(another["id"], "more")["ok"] is False
+    assert api._changes.get(another["id"])["status"] == "pending"

@@ -4,7 +4,7 @@
 import { html } from "htm/preact";
 import { useState } from "preact/hooks";
 import { Icon } from "./common.js";
-import { changeAction } from "../state.js";
+import { changeAction, discardChange } from "../state.js";
 import { cx } from "../lib/util.js";
 
 const STEP_ICONS = {
@@ -61,6 +61,8 @@ export function ChangeCards({ changes }) {
 
 function ChangeCard({ change }) {
   const [busy, setBusy] = useState(false);
+  const [denying, setDenying] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const ext = change.name.split(".").pop().toLowerCase();
   const verb = change.kind === "modify" ? "Update" : "Create";
   const status = STATUS[change.status] || { label: change.status, cls: "" };
@@ -69,6 +71,12 @@ function ChangeCard({ change }) {
     setBusy(true);
     await changeAction(action, change, force);
     setBusy(false);
+  };
+  const deny = async () => {
+    setBusy(true);
+    const ok = await discardChange(change, feedback);
+    setBusy(false);
+    if (ok) setDenying(false);
   };
   return html`
     <div class=${cx("change-card", change.status)}>
@@ -87,12 +95,45 @@ function ChangeCard({ change }) {
         This file was edited after the agent proposed its change. Applying will replace those edits (the current file
         is kept in history).
       </div>`}
+      ${denying &&
+      html`<div class="deny-box">
+        <label for=${`deny-${change.id}`}>What should be different? <span class="muted">(optional)</span></label>
+        <textarea
+          id=${`deny-${change.id}`}
+          class="input"
+          rows="3"
+          autofocus
+          placeholder="e.g. Use “Late” instead of “Delayed”, and leave the Notes column empty."
+          value=${feedback}
+          onInput=${(e) => setFeedback(e.currentTarget.value)}
+          onKeyDown=${(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) deny();
+            if (e.key === "Escape") setDenying(false);
+          }}
+        ></textarea>
+        <div class="muted hint">
+          ${feedback.trim()
+            ? "The agent will get your feedback and propose a new version."
+            : "Leave empty to just discard. The agent will still know you didn't apply it."}
+        </div>
+      </div>`}
       <div class="change-actions">
         ${(change.status === "pending" || change.status === "conflicted") &&
-        html`<button class="btn primary sm" disabled=${busy} onClick=${() => act("apply", change.status === "conflicted")}>
-            <${Icon} name="check" size="sm" /> ${change.status === "conflicted" ? "Apply anyway" : "Apply"}
-          </button>
-          <button class="btn sm" disabled=${busy} onClick=${() => act("discard")}>Discard</button>`}
+        (denying
+          ? html`<button class="btn primary sm" disabled=${busy} onClick=${deny}>
+                ${feedback.trim() ? "Discard & tell agent" : "Discard"}
+              </button>
+              <button class="btn sm" disabled=${busy} onClick=${() => setDenying(false)}>Cancel</button>`
+          : html`<button
+                class="btn primary sm"
+                disabled=${busy}
+                onClick=${() => act("apply", change.status === "conflicted")}
+              >
+                <${Icon} name="check" size="sm" /> ${change.status === "conflicted" ? "Apply anyway" : "Apply"}
+              </button>
+              <button class="btn sm" disabled=${busy} onClick=${() => setDenying(true)}>
+                <${Icon} name="x" size="sm" /> Discard…
+              </button>`)}
         ${change.can_undo &&
         html`<button class="btn sm" disabled=${busy} onClick=${() => act("undo")}>
           <${Icon} name="undo-2" size="sm" /> Undo

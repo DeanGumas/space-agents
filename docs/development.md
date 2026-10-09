@@ -56,6 +56,8 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
   Token usage per run is logged ("Usage for …").
 - **Smoke test:** launches the actual pywebview window, waits for the UI to report ready, checks the DOM rendered and
   no JS errors occurred, then exits. Use it in CI on Windows and macOS runners.
+- **Agent-loop tests** (`tests/test_loop.py`) use a scripted model (`ScriptedClient`) and a fake sandbox, so tool
+  flows are tested without network or a webview. `tests/conftest.py` provides the `sample_docs` fixture.
 - **`tests/test_ui.py`** catches the common front-end breakages without a browser: CSP hash drift, missing vendored
   files, broken relative imports, unknown icon names, and templates referencing unknown servers.
 
@@ -68,11 +70,21 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 | Add an agent template | Drop a manifest JSON in `templates/agents/` (no `id`); tests validate it |
 | Add a fake data source | Edit `dev/catalog.json` (same format as the future `/mcp` catalog) |
 | Add a bridge method | Public method on `Api` in `space_agents/bridge.py` with `@endpoint`; call with `call("name", ...)` |
+| Add a tool for agents | Add its spec to `TOOL_SPECS` and a branch in `ToolBox.call` (`tools/registry.py`); return a `ToolOutcome` with a plain-language `summary`; resolve paths with `self.access` |
+| Change agent behavior | System prompt in `runtime/prompts.py`; for small models, instructions inside tool results (registry) work better |
+| Allow a new sandbox package | See "Third-party front-end assets" above (`PYODIDE` in `scripts/vendor.py`) |
+| Test a live model cheaply | `gpt-5-nano` with `SPACE_AGENTS_REASONING_EFFORT=low`; a document task is ~10–40k tokens. Check "Usage for" in the log |
 
 ## Troubleshooting
 
 - **Blank window:** run with `--debug`, then right-click → Inspect → Console. Module import errors and CSP
   violations show up there.
 - **"Refused to execute inline script" in the console:** the import map changed; run `scripts/update_csp.py`.
+- **Sandbox "failed to start":** run `--sandbox-selftest`. If the worker never fetches `/vendor/pyodide/pyodide.mjs`,
+  check the worker CSP in `server.py` (no `worker-src 'none'`) and that `scripts/vendor.py` has fetched Pyodide.
+- **No change card, and the agent says a folder is read-only:** the agent's folder is granted *Read only*. Switch it
+  to *Read & write* under Edit → Files & folders.
+- **A custom script that calls `main.run()` hangs on exit:** call `os._exit()` afterwards, like `__main__.py` does
+  (see Shutdown in architecture.md).
 - **macOS log noise like `NSWindow warning: adding an unknown subview: <WKInspectorWKWebView>`:** harmless. It
   appears when the web inspector opens.

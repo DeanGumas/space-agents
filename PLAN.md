@@ -47,7 +47,8 @@
 | Dev tooling | [uv](https://docs.astral.sh/uv/) | Manages the Python version and venv; `pyproject.toml` + `uv.lock` give reproducible installs |
 | Window | [pywebview](https://pywebview.flowrl.com/) | Native window using the OS webview (Edge WebView2 on Windows, WKWebView on macOS); no browser, no Chromium bundle |
 | UI | HTML + CSS + [Preact](https://preactjs.com/) + [htm](https://github.com/developit/htm), vendored ES modules | React-style components and hooks with **no build step and no npm** (see 2.4) |
-| UI ↔ Python | pywebview `js_api` bridge | JS calls Python directly (`await pywebview.api.x()`); Python pushes events via `evaluate_js`. No Flask or app HTTP API |
+| UI ↔ Python | pywebview `js_api` bridge | JS calls Python directly (`await pywebview.api.x()`); Python pushes events via `run_js`. No Flask or app HTTP API |
+| Local server | small WSGI app (`server.py`, using `bottle`, which pywebview already bundles) | Serves `ui/` on 127.0.0.1 with correct `.mjs`/`.wasm` types, the sandbox worker's CSP header, and token-scoped sandbox file routes |
 | HTTP | `httpx` | Async, streaming, HTTP/2-capable; used for both LLM and MCP |
 | TLS | `truststore` | Uses the OS certificate store so internal servers signed by a corporate CA just work |
 | Secrets | `keyring` | API keys go in Windows Credential Manager / macOS Keychain, never in plain files |
@@ -97,7 +98,7 @@ uv run python -m space_agents --debug
 │     ├── Changes             – proposed changes, apply/discard, file version history       │
 │     └── Store               – SQLite (single writer), manifests on disk                   │
 │                                                                                           │
-│  Document worker process: pypdfium2 + OOXML extraction (crash- and hang-isolated)         │
+│  Document extraction: dedicated thread (pypdfium2 + OOXML); worker process planned        │
 │  Sandbox: Pyodide in a Web Worker inside the webview (no bridge, no disk, no network)     │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -121,14 +122,18 @@ SpaceAgents/
   agents/
     po-manager.json      # one manifest per agent (shareable; contains no secrets)
   avatars/<id>.png       # optional agent pictures
-  attachments/<sha256>/  # snapshots of files the user dropped into chat (deduplicated by content)
   staging/<change-id>/   # sandbox outputs waiting to be applied (proposed changes)
-  history/<sha256>       # previous versions of files the app overwrote (restorable)
-  space.db               # SQLite: messages, attachments, runs, tool_calls (audit), notifications, agent_memory,
-                         #         doc_cache + doc_pages (FTS5), changes, file_versions
+  history/<sha256>       # previous versions of files the app overwrote (restorable, pruned after 30 days)
+  workspaces/<token>/    # per-run sandbox copy-in/copy-out folders (deleted after each run and on startup)
+  attachments/<sha256>/  # (planned) snapshots of files the user dropped into chat
+  logs/                  # only when the data dir is overridden (dev); otherwise the OS log folder
+  space.db               # SQLite. Built: messages (+ token usage), tool_calls (audit), changes, file_versions,
+                         #   doc_cache + doc_pages + doc_fts (FTS5). Planned: attachments, runs, notifications,
+                         #   agent_memory
 ```
 
-The API key is stored in the OS keychain under service `SpaceAgents`.
+The API key will be stored in the OS keychain under service `SpaceAgents`. During development it comes from
+`SPACE_AGENTS_API_KEY` in `.env`.
 
 ### 2.4 UI
 
@@ -162,10 +167,15 @@ export function AgentRow({ agent, active, onSelect }) {
 - **Sanitization:** DOMPurify is **mandatory** for all rendered model output. Model output can echo untrusted
   email/document content, and since the webview has a bridge into Python, XSS would be a privilege escalation. Also set
   a strict Content-Security-Policy in `index.html` (no inline script, no remote origins).
-- **Serving the files:** pywebview serves `ui/` from its built-in static file server on `127.0.0.1` (ES modules can't
-  load from `file://`). Every app action goes through the `js_api` bridge. The one addition is the sandbox's file
-  transfer routes (§2.9), which are scoped to a single run by an unguessable token.
-- **CSP additions for the sandbox:** `'wasm-unsafe-eval'` (to compile WebAssembly) and `worker-src 'self'`.
+- **Serving the files:** our WSGI app (`server.py`), passed to pywebview as the window URL, serves `ui/` on
+  `127.0.0.1` (ES modules can't load from `file://`). Every app action goes through the `js_api` bridge. The only other
+  routes are the sandbox's file transfer routes (§2.9), scoped to a single run by an unguessable token.
+- **CSP:**
+  - **Page:** adds `worker-src 'self'`.
+  - **Sandbox worker:** gets its own CSP as an HTTP header, with `'wasm-unsafe-eval'` to compile WebAssembly and
+    `connect-src 'self'`.
+  - **Don't add `worker-src 'none'` to the worker:** WebKit applies it to the worker's own module imports, so
+    Pyodide can't load.
 
 Layout (Slack-style):
 
@@ -248,6 +258,16 @@ For development and testing, a `.env` file, environment variables, and CLI flags
   Tool calling depends on vLLM launch flags per model (`--enable-auto-tool-choice --tool-call-parser <parser>`) and on
   the gateway passing `tools` and streamed `tool_calls` through, so we surface this clearly instead of failing silently.
 - Retries with backoff on 429/5xx; respects `Retry-After`.
+- **Built** (`llm/client.py`):
+  - streaming with tool calls
+  - token usage logged per run
+  - `max_completion_tokens` cap
+  - `reasoning_effort` (default `low`) to bound reasoning tokens
+- **Parameter compatibility:** optional parameters a model rejects are dropped automatically and remembered per model.
+  For example, GPT-5 models reject a custom `temperature`.
+- **Streaming fallback:** if a provider refuses streaming for a model, the client falls back to non-streamed responses.
+- **Dev API key:** comes from `SPACE_AGENTS_API_KEY` in `.env` until onboarding and the keychain exist.
+- **Tested:** OpenAI's API with `gpt-5-nano`.
 
 ### 2.6 Tool sources (MCP and OpenAPI servers)
 
@@ -329,110 +349,123 @@ server hide servers a user isn't entitled to. Proposed response, for us to final
 
 ### 2.7 Tools available to agents
 
-The model sees friendly, task-shaped tool names. Users see plain-language activity, not code.
+The model sees a few clear, task-shaped tools. Users see plain-language activity steps ("Read PO Tracker.xlsx"), with
+"Show details" revealing arguments, code, and results.
 
-| Tool group | Tools | Notes |
-|---|---|---|
-| Files (read) | `list_dir`, `find_files` (glob/name), `search_text`, `read_file`, `file_info` | Only inside granted folders and attachments |
-| Documents | `read_document`, `search_document`, `list_pages` | Local extraction, cached and indexed (§2.8) |
-| Analysis | `analyze_files(description, code, inputs)` | Python in the Pyodide sandbox on copies of the inputs (§2.9) |
-| Writing | `create_spreadsheet`, `append_rows`, `create_document`, `save_file` | Structured writers that run fixed code in the sandbox; output becomes a proposed change (§2.10) |
-| Org servers | whatever the selected MCP/OpenAPI servers expose | Read-only tools only by default (§4). Includes the GPU document server's `convert_document` |
-| Built-in | `post_report`, `remember`, `recall`, `current_time` | `post_report` is how a scheduled run delivers its result |
+| Tool group | Tools | Status | Notes |
+|---|---|---|---|
+| Files (read) | `list_files(folder?, pattern?)` | ✅ built | Recursive listing of granted folders |
+| Documents | `read_document(path, pages?)`, `search_document(path, query)` | ✅ built | Local extraction, cached and indexed (§2.8) |
+| Python | `run_python(description, code, input_files?, output_folder?)` | ✅ built | Pyodide sandbox on copies of the inputs; output files become proposed changes (§2.9–2.10) |
+| Documents | `list_pages(path)` (outline: headings, sheets, slides) | planned | |
+| Writing | `append_rows`, `create_document`, … | deferred | Structured writers. With the guardrails in §2.9, `run_python` handled spreadsheet edits reliably even with gpt-5-nano; revisit if needed |
+| Org servers | whatever the selected MCP/OpenAPI servers expose | planned (Phase 2a) | Read-only tools only by default (§4). Includes the GPU document server's `convert_document` |
+| Built-in | `post_report`, `remember`, `recall`, `current_time` | planned (Phase 3) | `post_report` is how a scheduled run delivers its result |
 
-Tool results are truncated (configurable, e.g. 12k chars) with a note telling the model how to page or narrow the query.
+- **Errors are results, not crashes.** Tool errors (access denied, unsupported file, code failure, even an unexpected
+  bug) go back to the model as the tool's result, so it can correct itself or explain.
+- **Truncation:** results over 12k characters are cut, with a note telling the model how to page or narrow the query.
 
-The structured writers exist because mid-sized models produce a correct `append_rows` call far more reliably than
-correct openpyxl code, and the calls are easy to audit. `analyze_files` covers the long tail (totals across 40
-invoices, pivots, charts).
-
-### 2.8 Documents: local-first
+### 2.8 Documents: local-first ✅
 
 Most business documents are digital: PDFs exported from Word or ERP systems, plus Office files. These have real text
 that can be extracted in seconds on a laptop, with no OCR. Scanned pages are the exception, and those belong on the GPU
 document server.
 
-**Extraction (runs in a separate worker process).**
+**Extraction** (`space_agents/documents/extract.py`)
 
 | Format | How | Notes |
 |---|---|---|
-| PDF | `pypdfium2` (PDFium, Chrome's PDF engine) | Per-page text, typically thousands of pages per minute. Each page is classified as *text*, *no text layer* (scanned), or *garbled* (broken font encoding) |
-| `.docx` | stdlib `zipfile` + `xml.etree.iterparse` | Paragraphs, headings, and tables as Markdown. Chunked into "pages" of ~3k characters for search and paging |
-| `.xlsx` | stdlib, streaming | Per sheet: header + rows as Markdown/CSV, row-capped, with sheet/row counts so the model can ask for more |
-| `.pptx` | stdlib | Per slide: title, text, notes |
-| `.csv`, `.txt`, `.md`, `.json`, `.eml`, logs | native / stdlib `email` | `.msg` (Outlook) and legacy `.doc/.xls/.ppt` are not supported locally; they're reported so the agent can use the document server |
-| Images | none locally | Reported as "image, no text"; the agent can send them to the document server |
+| PDF | `pypdfium2` (PDFium, Chrome's PDF engine) | Per-page text; **measured ~460 text pages/s** (1,000 pages ≈ 2 s). Each page is classified as *text*, *no text layer* (scanned), or *garbled* (broken font encoding) |
+| `.docx` | stdlib `zipfile` + XML | Headings → `#`, tables → Markdown. Chunked into ~3k-character "pages" |
+| `.xlsx` | stdlib, streaming | Per sheet: Markdown table, 100 rows per page, header repeated. Date-formatted cells shown as ISO dates (not Excel serial numbers) |
+| `.pptx` | stdlib | One page per slide |
+| `.csv`, `.txt`, `.md`, `.json`, `.eml`, logs | stdlib | `.msg` (Outlook) and legacy `.doc/.xls/.ppt` aren't supported locally; they're reported so the agent can use the document server |
+| Images | none locally | Reported as unsupported; the agent can send them to the document server |
 
-The extractor runs in a **separate worker process** with a per-file timeout, for three reasons: `pypdfium2` isn't
-thread-safe, a malformed or malicious file can't hang or crash the app, and big jobs don't block the UI.
+Extraction currently runs on **one dedicated thread**, because `pypdfium2` isn't thread-safe. **Planned hardening:** a
+separate worker process with a per-file timeout, so a malformed or malicious file can't hang or crash the app.
 
-**Cache and search.**
-- Extracted text is stored per page in SQLite (`doc_cache` keyed by content SHA-256, `doc_pages` with an **FTS5**
-  index). Each file is extracted once per version, and later reads are instant.
-- Cache entries are tied to `(path, size, mtime)` for quick change detection, then confirmed by hash. Entries are
-  evicted LRU above a size cap (e.g. 1 GB).
-- **Optional background indexing** of granted folders while the computer is idle, so scheduled runs never wait on
-  extraction.
+**Cache and search** (`space_agents/documents/library.py`)
+- Extracted text is stored per page in SQLite (`doc_cache` keyed by content SHA-256, `doc_pages`, and an **FTS5**
+  index `doc_fts`). Each file is extracted once per version; a renamed copy is found by hash; later reads are instant.
+- Lookups go `(path, size, mtime)` → SHA-256 → cached pages.
+- **Planned:** LRU eviction above a size cap (e.g. 1 GB), and optional background indexing of granted folders while
+  the computer is idle.
 
-**Tools.**
-- **`read_document(path, pages="1-20")`** returns text with page markers and a header, for example:
-  `"Q3 Supplier Report.pdf: 1,000 pages; pages 412–450 have no text layer (scanned)"`.
-  Large documents are never dumped whole. A 1,000-page PDF is ~500k+ tokens.
+**Tools**
+- **`read_document(path, pages="1-20")`** returns text with page markers and a header, e.g.
+  `"Q3 Supplier Report.pdf: 1,000 pages (pdf)"` plus notes like *"Pages 412–450 have no text layer (likely scanned
+  images)"*. Output stops at ~12k characters with a hint for the next page range. A 1,000-page PDF is ~500k+ tokens,
+  so documents are never dumped whole.
 - **`search_document(path, query)`** does a BM25 search over the cached pages and returns the best pages with
   snippets. This is how agents answer questions about big documents.
-- **`list_pages(path)`** returns an outline: headings, sheet names, slide titles.
 
-**The GPU document server.** It stays in the catalog (`role: "document_processing"`) and is available to every agent
-as a regular tool (`convert_document`, with optional VLM mode). For now the model decides when to use it, guided by
-`read_document` flagging scanned or garbled pages and a line in the system prompt. Automatic routing of scanned pages,
-and skills that teach models when local processing isn't good enough, come later. Document server results are cached
-the same way.
+**The GPU document server.** It stays in the catalog (`role: "document_processing"`) and will be available to every
+agent as a regular tool (`convert_document`, with optional VLM mode) once tool sources are wired up (Phase 2a). The
+model decides when to use it, guided by `read_document` flagging scanned or garbled pages. Automatic routing of scanned
+pages, and skills that teach models when local processing isn't good enough, come later.
 
-### 2.9 Code execution: Pyodide sandbox
+### 2.9 Code execution: Pyodide sandbox ✅
 
-Agents can run Python, but only inside **Pyodide** (CPython compiled to WebAssembly) in a **Web Worker** in the app's
-webview.
+Agents can run Python, but only inside **Pyodide** (Pyodide 314.0.7, which runs CPython 3.14 compiled to WebAssembly)
+in a **Web Worker** in the app's webview. Details: `docs/documents-and-sandbox.md`.
 
 ```
-agent loop ──analyze_files(code, inputs)──► sandbox host (Python)
-                                              1. sandbox-check each input path (granted folder or attachment)
-                                              2. copy inputs → workspace/<run>/in/, mint a run token
-                                              3. post {code, token, input names} to the worker (via the UI)
-                                                       │
-                                        Web Worker (Pyodide)
-                                              4. fetch /workspace/<token>/in/* → in-memory FS /work/in
-                                              5. run code (cwd /work); stdout/stderr captured
-                                              6. PUT /work/out/* → /workspace/<token>/out/*
-                                              7. post {status, stdout, outputs, figures}
-                                              │
-sandbox host ◄────────────────────────────────┘
-  8. outputs → proposed changes (§2.10); stdout (truncated) → tool result
+agent loop ──run_python(code, input_files)──► ToolBox (tools/registry.py)
+                                                 1. resolve inputs via FolderAccess; find file paths in the code
+                                                 2. PyodideSandbox.run (sandbox/pyodide.py): copy inputs to
+                                                    workspaces/<token>/in/, mint a one-run token
+                                                 3. run_js("window.__sandbox.run(job)") → ui/js/sandbox.js
+                                                          │
+                                          Web Worker (ui/sandbox/worker.js)
+                                                 4. GET /workspace/<token>/in/* → in-memory FS /work/in (+ aliases)
+                                                 5. load allow-listed packages the code needs; run it (cwd /work)
+                                                 6. PUT outputs → /workspace/<token>/out/*
+                                                 7. call("sandbox_done", run_id, result) via the main thread
+                                                          │
+ToolBox ◄─────────────────────────────────────────────────┘
+  8. outputs → diff/repair step (in the sandbox) → proposed changes (§2.10); stdout + change summary → tool result
   9. token revoked, workspace deleted
 ```
 
 - **Isolation:**
   - **Disk:** Pyodide only has an in-memory filesystem. The worker sees only copies of the inputs.
-  - **Network:** CSP `connect-src 'self'`. The only reachable server routes are the run's own `/workspace/<token>/…`,
-    with a 128-bit token that's valid for one run.
+  - **Network:** the worker's own CSP header (sent by `server.py`) allows `connect-src 'self'` only. The only routes
+    that accept anything are the run's own `/workspace/<token>/…`, with a 192-bit token valid for one run. WebKit
+    leaves a blocked fetch pending rather than rejecting it, so external requests simply never complete.
   - **Bridge:** none. Workers can't reach `window.pywebview`, and messages from the worker are validated as untrusted
     data.
-- **Limits:** wall-clock timeout per call (default 60 s), after which the worker is terminated and respawned. Output
-  size cap, at most N output files, and the WebAssembly memory ceiling.
-- **File transfer** happens over token-scoped HTTP on the app's local server, binary and streamed, so we avoid pushing
-  large base64 blobs through `evaluate_js`.
-- **Packages (vendored, allow-listed):** `pandas`, `numpy`, `openpyxl` (+ `et_xmlfile`), `python-docx` (+ `lxml`),
-  `pypdf` (merge/split/fill), `xlsxwriter`, `matplotlib`. Nothing installs at runtime. `micropip` is not exposed.
-- **Warm start:** one worker is kept loaded after first use, since cold start is a few seconds. It's recycled between
-  agents so state can't leak across them (a fresh interpreter per agent or run, TBD after the spike).
-- **Backend interface:** `ExecutionBackend.run(code, inputs, limits) -> RunResult`, so Docker/Podman or a server-side
-  sandbox can be added later without changing tools or the changes flow.
-- **What users see:** a step like "📊 Analyzed 12 invoices", with charts shown inline and "Show details" revealing the
-  code and output.
+- **Limits:**
+  - **Time:** wall-clock timeout per run (default 90 s, including first-use load), after which the worker is
+    terminated and respawned.
+  - **Outputs:** max 20 output files and 100 MB of outputs per run, plus the WebAssembly memory ceiling.
+- **File transfer** happens over token-scoped HTTP on the app's local server: binary, not base64 through
+  `evaluate_js`.
+- **Packages** (vendored, allow-listed, 34 MB):
+  - `pandas`, `numpy`, `openpyxl` (+ `et_xmlfile`), `python-docx` (+ `lxml`), `pypdf`, `xlsxwriter`, `matplotlib`
+  - Nothing installs at runtime.
+  - Pandas' lazily imported engines (openpyxl/xlsxwriter, matplotlib for plots) are loaded with it.
+- **Runs:** one worker stays warm after first use (cold start ~3 s, warm runs ~instant). Every run gets a fresh
+  `/work` directory and a fresh global namespace, and runs are serialized.
+- **Guardrails for small models**, learned from live gpt-5-nano runs:
+  - **File paths in code:** files the code names are auto-mapped into the sandbox (host paths, `in/X`, `out/X`). This
+    is detected with `ast`, never by running the code on the host. In-place edits come back as outputs.
+  - **Chained edits:** they build on the agent's own pending version of the file.
+  - **Feedback in the tool result:** it reports exactly which cells or lines changed. An identical output is reported
+    as "no changes".
+  - **Date cells:** text written into date cells as ISO dates is repaired to real dates.
+  - **Formatting:** lost formatting (e.g. a pandas rewrite) is flagged so the model redoes the edit with openpyxl.
+- **Backend interface:** planned. `ExecutionBackend.run(code, inputs, limits) -> RunResult`, so Docker/Podman or a
+  server-side sandbox can be added later without changing tools or the changes flow. Today `PyodideSandbox` is the only
+  backend.
+- **Verification:** `python -m space_agents --sandbox-selftest` runs 9 checks in the real webview. All pass on macOS;
+  Windows/WebView2 is still to be run.
 
-### 2.10 Proposed changes and file history
+### 2.10 Proposed changes and file history ✅
 
-Agents **never write directly** to user files. Every file an agent produces (from the sandbox, a structured writer,
-or `save_file`) becomes a **proposed change**:
+Agents **never write directly** to user files. Every file an agent produces becomes a **proposed change**
+(`space_agents/changes.py`):
 
 ```
 Proposed change
@@ -440,31 +473,45 @@ Proposed change
   kind:     modify | create
   staged:   <data>/staging/<change-id>/PO Tracker.xlsx
   base:     sha256 of the target when proposed            (detects edits made in the meantime)
-  summary:  "3 rows added (POs 45821, 45907, 46010)"      (model-written + computed)
-  status:   pending → applied | discarded | conflicted | expired
+  summary:  model's description + computed diff (cells/lines changed, samples, repairs, warnings)
+  status:   pending → applied → undone
+            pending → discarded
+            pending → conflicted → applied ("Apply anyway") | discarded
 ```
 
 - **Policy (per agent, `file_changes` in the manifest):**
   - **New files:** `allow` (default: saved immediately and shown as a card) or `ask`.
   - **Existing files:** `ask` (default: Apply/Discard card) or `allow_with_backup`.
   - **Deletes, renames, and moves are never possible.**
-- **Review view:** shows the computed difference.
-  - **Text, Markdown, CSV:** a line diff.
-  - **Excel:** changed sheets, added/removed rows, changed cells, with a sample.
-  - **Word:** a paragraph-level text diff.
-  - **Anything else:** size and type only.
+- **Review (inline on the card):**
+  - **Excel:** sheets changed, row counts, and a cell-by-cell before/after table (up to 12 samples).
+  - **Text/CSV/Markdown/JSON:** a line diff.
+  - **Anything else:** size only.
 
-  Diffs for Office files are computed in the sandbox.
+  Excel diffs are computed in the sandbox. **Planned:** a Word paragraph diff, and a full-screen review view for big
+  changes.
 - **Apply:**
   1. Re-check the target hash. If the file changed since the proposal, it's marked *conflicted* and the user decides.
   2. Snapshot the current file into `history/`.
   3. Write via a temp file and atomic rename.
-- **File history:** every overwrite keeps the previous version (`file_versions` table), with **Restore** on the card
-  and later a per-agent "Files changed" list. Retention defaults to 30 days and a size cap, configurable.
-- **Scheduled runs:** pending changes go to the Activity inbox with a notification ("PO Manager wants to update PO
-  Tracker.xlsx"). They expire after 7 days.
+- **Discard → "What should be different?"** (optional):
+  - **With feedback:** the change is discarded and the feedback is posted as the user's next message, so the agent
+    revises and a new card appears.
+  - **Without feedback:** it's just discarded.
+- **The agent learns outcomes.** When history is built, each earlier reply is annotated with what happened to its file
+  changes (applied, discarded, undone, still pending).
+- **Revisions in one reply:** if the agent edits the same file again before the user acts, the new version replaces
+  the pending proposal, so there's one card per file per reply.
+- **File history:** every overwrite keeps the previous version (`file_versions` table). **Undo** on the card restores
+  it, after snapshotting the current file too. A created file can't be undone, since that would be a delete. History
+  older than 30 days is pruned on startup.
+  - **Planned:** a per-agent "Files changed" list and a size cap.
+- **Scheduled runs (planned, Phase 3):** pending changes go to the Activity inbox with a notification ("PO Manager
+  wants to update PO Tracker.xlsx") and expire after 7 days.
+- **Planned: a permission card for read-only folders.** If an agent tries to save into a folder granted *read only*,
+  it shows *"Allow writing to this folder?"* instead of a dead end.
 
-### 2.11 Attachments (drag-and-drop and upload)
+### 2.11 Attachments (drag-and-drop and upload): planned (Phase 2a)
 
 Users can give an agent files directly in chat, no folder grant needed.
 
@@ -475,11 +522,11 @@ Users can give an agent files directly in chat, no folder grant needed.
     streamed through the bridge.
 - **Snapshot on attach:** the file is copied into `attachments/<sha256>/` (deduplicated by content), so the agent works
   on a stable copy and the original is never touched. Size limit: 200 MB per file (configurable).
-- **Pre-extraction starts immediately** in the document worker. The chip shows progress ("Reading… 340/1,000 pages"),
+- **Pre-extraction starts immediately** in the background. The chip shows progress ("Reading… 340/1,000 pages"),
   so the text is usually ready by the time the user hits Send.
 - **Grant:** the agent can read that attachment for the rest of the conversation. Attachments are listed in the
   agent's context as `attachment://<id>/<filename>` and accepted by `read_document`, `search_document`, and
-  `analyze_files`.
+  `run_python`.
 - **Agent-produced files** appear in the same timeline as cards (proposed changes), with "Open" and "Show in folder"
   once applied.
 - **Images:** attachable now. They're readable through the document server and, later, sent directly to vision-capable
@@ -587,7 +634,8 @@ Steps:
 
 1. **Assemble context:** base system prompt (safety rules, how to use tools, how to cite sources, today's date/time,
    user's timezone) + manifest `instructions` + a description of granted sources + memory notes + summaries of the last
-   N run reports (so the agent knows what it already reported).
+   N run reports (so the agent knows what it already reported). Built today: the system prompt plus the last 20
+   messages, with each earlier reply annotated with the outcome of its proposed file changes (§2.10).
 2. **Call model** with streaming and the agent's tool list.
 3. **Execute tool calls** (independent calls in parallel, with a concurrency cap), record each one in the audit log,
    append results, and loop.
@@ -651,8 +699,8 @@ tickets) plus **ordinary model mistakes**, not a malicious local user.
 4. **Untrusted content handling.** Tool results are wrapped in clear delimiters, and the system prompt states that
    content from tools is data, not instructions. With no outbound action tools in v1, the worst a successful injection
    can do is *propose* changes inside user-approved folders, which are reviewable, restorable, and never deletes.
-   Malformed or malicious documents are parsed in a separate worker process with timeouts, so a bad PDF can't hang or
-   crash the app.
+   **Planned:** malformed or malicious documents are parsed in a separate worker process with timeouts, so a bad PDF
+   can't hang or crash the app. Today extraction runs on a dedicated in-process thread.
 5. **UI hardening.** All model output is sanitized with DOMPurify and the page has a strict CSP. Links open in the
    system browser, never inside the app webview.
 6. **Secrets.** The API key is the user's identity across the models, every server, and (via OBO) their mailbox and
@@ -717,82 +765,72 @@ Agents run **only while the app is open and the computer is awake**, by design. 
 
 ## 7. Repository layout
 
+Current tree. Entries marked *(planned)* don't exist yet.
+
 ```
 space-agents/
-  app.py                       # entry point (thin: calls space_agents.main.run())
-  pyproject.toml               # deps, ruff, pytest config; requires-python = ">=3.12,<3.13"
-  uv.lock
+  pyproject.toml               # metadata, core deps, ruff/pytest config; requires-python = ">=3.12,<3.13"
+  requirements.txt             # install list for now (incl. dev + "maybe" deps); uv.lock later
   .python-version              # 3.12 (read by uv)
-  PLAN.md
-  README.md
-  LICENSE
+  .env.example                 # dev config template (copy to .env, git-ignored)
+  PLAN.md, README.md, LICENSE (planned)
+  docs/                        # how the pieces fit together (start at docs/README.md)
   space_agents/
-    __init__.py
-    __main__.py
-    main.py                    # create window, start core thread, lifecycle, single-instance
-    bridge.py                  # js_api surface exposed to the UI; event flusher
-    paths.py                   # per-OS app data/log locations
-    settings.py                # layered endpoint config (defaults → remote → user), settings.json, keyring access
-    defaults.json              # build-time org defaults: llm_base_url, mcp_base_url, remote config path
-    store.py                   # SQLite schema, migrations, queries
-    manifest.py                # dataclasses, validation, migrations, templates
-    llm/
-      client.py                # OpenAI-compatible chat completions (stream, tools, retries)
-    sources/
-      base.py                  # ToolSource protocol, ToolSpec/ToolResult, shared httpx client
-      mcp.py                   # Streamable HTTP MCP client
-      openapi.py               # OpenAPI spec → tools, $ref inlining, calls
-      catalog.py               # catalog fetch, manual add, type auto-detection
-    tools/
-      registry.py              # builds per-agent tool list, dispatch, truncation, audit
-      filesystem.py            # sandboxed file tools (read; writes go through changes/)
-      documents.py             # read_document, search_document, list_pages tools
-      sandbox.py               # analyze_files + structured writers (create_spreadsheet, …)
-      builtin.py               # post_report, remember, recall, current_time
-    documents/
-      extract.py               # format detection + dispatch; runs in the document worker process
-      pdf.py                   # pypdfium2 per-page text, page classification (text / no text / garbled)
-      ooxml.py                 # .docx/.xlsx/.pptx via zipfile + iterparse (tables → Markdown)
-      cache.py                 # doc_cache/doc_pages tables, FTS5 search, background indexing
-    sandbox/
-      backend.py               # ExecutionBackend protocol (Pyodide now; Docker/server later)
-      pyodide.py               # host side: workspace, run tokens, timeouts, output collection
-      routes.py                # token-scoped /workspace/<token>/… file transfer routes
-    changes/
-      proposals.py             # proposed changes: stage, summarize, apply, discard, conflict check
-      history.py               # file_versions: snapshot on overwrite, restore, retention
-    attachments.py             # snapshot dropped/uploaded files, dedupe, pre-extract
+    __main__.py                # `python -m space_agents`: run(), then hard-exit (see docs/architecture.md)
+    main.py                    # CLI, logging, wiring, window; --smoke-test, --sandbox-selftest
+    bridge.py                  # js_api surface exposed to the UI
+    core.py                    # asyncio "core" thread + EventBus (batched UI events)
+    server.py                  # WSGI app: ui/ files, sandbox worker CSP header, token-scoped workspace routes
+    config.py, settings.py     # layered config (defaults → user → .env → env → CLI); settings.json
+    defaults.json              # build-time org defaults (URLs baked in for releases)
+    paths.py                   # resource dir (dev vs bundle), per-OS data/log dirs
+    store.py                   # agents/*.json, avatars, SQLite schema + migrations + query helpers
+    manifest.py                # dataclasses + validation
+    catalog.py                 # tool-server catalog (dev file for now) + agent templates
+    changes.py                 # proposed changes: stage, supersede, apply/discard/undo, conflicts, file history
+    llm/client.py              # OpenAI-compatible chat (streaming, tools, param-compat, retries)
     runtime/
-      loop.py                  # the agent tool-calling loop
-      runner.py                # run lifecycle, cancellation, concurrency limits
-      scheduler.py             # intervals, active hours, jitter, missed-run handling
-      prompts.py               # base system prompt and context assembly
+      loop.py                  # AgentRunner: the tool-calling loop, history (with change outcomes), events
+      prompts.py               # system prompt
+      dummy.py                 # placeholder replies when no model is configured
+      scheduler.py             # (planned) intervals, active hours, jitter, missed-run handling
+    tools/
+      registry.py              # tool specs + execution; run_python guardrails; xlsx diff/repair script
+      access.py                # FolderAccess: realpath containment, deny-list, read vs write
+      builtin.py               # (planned) post_report, remember, recall, current_time
+    documents/
+      extract.py               # PDF (pypdfium2) / DOCX / XLSX / PPTX / text → pages, page classification
+      library.py               # doc cache (by sha256), FTS5 search, read with page ranges
+    sandbox/
+      pyodide.py               # host side: workspaces, run tokens, aliases, timeouts, outputs
+      selftest.py              # --sandbox-selftest checks
+    sources/                   # (planned) MCP (Streamable HTTP) + OpenAPI tool sources, catalog fetch
+    attachments.py             # (planned) snapshot dropped/uploaded files, pre-extract
     platform/
-      autostart.py             # Windows Run key / macOS LaunchAgent
-      notify.py                # desktop notifications
-      single_instance.py
+      appearance.py            # OS dark mode, open folder in Finder/Explorer
+      autostart.py, notify.py, single_instance.py   # (planned)
   ui/
-    index.html
-    css/app.css
+    index.html                 # CSP + import map
+    css/tokens.css, app.css
     js/
-      main.js                  # boot, render <App/>, event dispatch
-      api.js                   # wrapper over window.pywebview.api + event subscription
-      state.js                 # app-wide store (agents, messages, unread) fed by bridge events
-      views/Sidebar.js, Channel.js, AgentSettings.js, AppSettings.js, Wizard.js, Activity.js
-      components/…             # Message, ReportCard, ToolCallRow, form controls
+      main.js, app.js, api.js, state.js
+      sandbox.js               # main-thread side of the sandbox (owns the Web Worker)
+      views/                   # Sidebar, Channel, AgentEditor, SettingsDialog, Welcome (+ Activity placeholder)
+      components/              # common.js, AvatarPicker.js, Activity.js (steps + change cards + deny box)
+      lib/                     # theme, markdown, emoji, util
     sandbox/worker.js          # Pyodide Web Worker: load packages, copy-in, run, copy-out
-    vendor/                    # preact, preact/hooks, htm, marked, purify, lucide/ (pinned, hashed)
-    vendor/pyodide/            # Pyodide runtime + allowed wheels (pinned, hashed)
+    vendor/                    # preact, htm, signals, marked, purify, lucide/ (committed, hashed)
+    vendor/pyodide/            # Pyodide runtime + allowed wheels (git-ignored; fetched by scripts/vendor.py)
   scripts/
-    vendor.py                  # download + verify pinned front-end files (stdlib only)
-  templates/
-    agents/purchase-order-manager.json, jira-triage.json, meeting-prep.json, …
-  packaging/
-    pyinstaller/space_agents.spec
-    windows/installer.iss, icon.ico
-    macos/Info.plist, icon.icns, dmg settings
-  tests/
-  .github/workflows/ci.yml, release.yml
+    vendor.py                  # download + verify pinned front-end files and Pyodide (stdlib only)
+    update_csp.py              # keep the CSP hash in sync with the import map
+  templates/agents/            # starter agent manifests
+  dev/
+    catalog.json               # offline stand-in for GET /mcp
+    make_sample_docs.py        # realistic test documents (also used as test fixtures)
+  tests/                       # pytest: unit, bridge, loop (scripted model + fake sandbox), static UI checks
+  packaging/                   # (planned) PyInstaller spec, Inno Setup script, macOS Info.plist/icons
+  .github/workflows/           # (planned) ci.yml, release.yml
 ```
 
 ---
@@ -828,82 +866,97 @@ Original scope:
 
 ### Progress (2026-10-05): vertical slice of Phases 1, 2a, and 2b working
 
-Done, end to end with gpt-5-nano:
-- real chat with streaming and the tool loop
-- `read_document` / `search_document` / `list_files` with the folder policy
-- local extraction (pypdfium2 + stdlib) with an FTS5 cache
-- the Pyodide sandbox: `run_python`, `--sandbox-selftest` passing on macOS
-- proposed changes: Apply / Discard / Undo / conflicts / history
-- activity steps and change cards in the UI
+Verified end to end in the real UI with gpt-5-nano:
+1. The agent reads a supplier PDF and updates a PO tracker spreadsheet.
+2. The user reviews the cell-level change card and clicks Apply; the real file is updated with its formatting intact.
+3. Discarding with feedback makes the agent revise, and Undo restores the previous version.
 
-Learned from live runs: small models need guardrails, documented in docs/documents-and-sandbox.md:
-- file paths in code are auto-mapped into the sandbox
-- chained edits supersede earlier pending changes
-- diff feedback goes back to the model
-- text dates are repaired
-- formatting loss is flagged
+A typical request costs ~10–40k tokens. There are 86 automated tests, plus `--sandbox-selftest` (9 checks) in the real
+webview.
 
-Deviations from the plan:
+**Lessons from live runs.** Small models need guardrails (details in §2.9 and `docs/documents-and-sandbox.md`):
+- **File paths:** paths in code are auto-mapped into the sandbox.
+- **Revisions:** chained edits build on and replace the agent's own pending change.
+- **Feedback:** exact diff feedback goes back to the model, and "no changes" is reported.
+- **Dates:** text dates are repaired.
+- **Formatting:** formatting loss is flagged.
+- **Where to put instructions:** small models follow instructions placed in tool results more reliably than ones in
+  the system prompt (e.g. "point the user to the change card").
+
+**Deviations from the plan:**
 - The tool is named `run_python`, not `analyze_files` (clearer to models).
-- Structured writers (`append_rows`, …) are deferred; `run_python` + guardrails was sufficient.
-- Extraction runs on a dedicated thread, not a worker process yet.
-
-Still open in these phases:
-- onboarding/keychain
-- `GET /models`
-- MCP/OpenAPI sources
-- attachments
-- running the sandbox self-test on Windows/WebView2
+- Structured writers (`append_rows`, …) are deferred; `run_python` plus guardrails was enough.
+- Extraction runs on a dedicated thread; a worker process is planned hardening.
+- The UI is served by our own small WSGI app instead of pywebview's static server (needed for the worker CSP header
+  and the sandbox routes).
+- There's no `ExecutionBackend` abstraction yet; `PyodideSandbox` is the only backend.
 
 ### Phase 1: Chat with an agent
-- Onboarding: paste the API key (→ keychain); endpoints come pre-filled from build defaults + remote config;
-  connection test; model list; `defaults.json` and remote-config loading.
-- Agent CRUD with the form-based manifest editor (name, avatar, instructions, model).
-- Streaming chat in the channel view, Markdown rendering (sanitized), message persistence, stop/cancel.
-- Sidebar with agents, status, last message preview.
+- ⬜ Onboarding:
+  - paste the API key (→ keychain)
+  - endpoints pre-filled from build defaults + remote config
+  - connection test with the tool-calling probe
+  - model list from `GET /models`
 
-**Exit:** a user can create an agent and chat with it against the company AI server.
+  Today the API key and model list come from `.env`.
+- ✅ Agent CRUD with the form-based manifest editor (name, avatar, instructions, model).
+- ✅ Streaming chat in the channel view, sanitized Markdown, message persistence, Stop.
+- ✅ Sidebar with agents, status, last message preview, unread badges.
+
+**Exit:** a user can create an agent and chat with it against the company AI server. Met with an OpenAI-compatible
+endpoint; still to verify against the company gateway.
 
 ### Phase 2a: Tools, data sources, and documents (read)
-- Tool registry and the agent loop with tool calling.
-- Filesystem read tools with the sandbox and deny-list. Native folder picker; read vs read-write per folder.
+- ✅ Tool registry and the agent loop with tool calling; tool errors returned to the model.
+- ✅ Filesystem read tools (`list_files`) with the folder policy and deny-list. Native folder picker; read vs
+  read & write per folder.
 - **Local document pipeline:**
-  - worker process
-  - `pypdfium2` and OOXML extraction with page classification
-  - `doc_cache` + FTS5
-  - `read_document` / `search_document` / `list_pages`
-  - optional idle-time indexing of granted folders
-- **Attachments:** paperclip + drag-and-drop, snapshots, pre-extraction with progress chips, `attachment://` grants.
-- Tool sources: `McpSource` (Streamable HTTP) and `OpenApiSource`, catalog plus auto-detection, per-agent server and
-  tool selection, read-only policy. The document server is wired up as a regular tool.
-- Tool-call rows in the timeline; per-agent audit log view.
-- Connection test includes the tool-calling probe.
+  - ✅ `pypdfium2` and OOXML extraction with page classification
+  - ✅ `doc_cache` + FTS5
+  - ✅ `read_document` / `search_document`
+  - ⬜ worker process
+  - ⬜ `list_pages`
+  - ⬜ idle-time indexing
+  - ⬜ cache size cap
+- ⬜ **Attachments:** paperclip + drag-and-drop, snapshots, pre-extraction with progress chips, `attachment://` grants.
+- ⬜ Tool sources: `McpSource` (Streamable HTTP) and `OpenApiSource`, catalog fetch plus auto-detection, per-agent
+  tool selection, read-only policy. The document server is wired up as a regular tool. (The catalog and editor UI
+  already work from `dev/catalog.json`.)
+- ✅ Tool-call rows ("activity steps") in the timeline with details.
+- ⬜ A per-agent audit log view.
 
-**Exit:** a chat agent can answer "what POs were delivered this week?" from Costpoint, "summarize the PDFs in my
-Downloads", and questions about a 1,000-page PDF dropped into chat, with page citations, in seconds.
+**Exit:** a chat agent can answer:
+- "What POs were delivered this week?" from Costpoint (⬜, needs MCP)
+- "Summarize the PDFs in my Downloads" (✅)
+- questions about a 1,000-page PDF dropped into chat, with page citations, in seconds (⬜ attachments; search is ✅)
 
 ### Phase 2b: Sandbox and proposed changes (write)
-1. **Spike first:**
-   - Pyodide in a Web Worker in WKWebView and WebView2, loading vendored wheels offline
-   - an `.xlsx` round-trip through openpyxl
-   - token-scoped file transfer routes on the local server
-   - `'wasm-unsafe-eval'` CSP
-   - measure cold start and memory
+1. ✅ **Spike:**
+   - Pyodide in a Web Worker loading vendored wheels offline
+   - `.xlsx` round-trip
+   - token-scoped file routes
+   - worker CSP (including the WebKit `worker-src` quirk)
+   - cold start ~3 s
 
-   Go/no-go on the design in §2.9.
-2. `ExecutionBackend` + Pyodide backend; `analyze_files`; structured writers (`create_spreadsheet`, `append_rows`,
-   `create_document`, `save_file`).
+   Go on macOS; ⬜ repeat on Windows/WebView2.
+2. ✅ The Pyodide sandbox and `run_python` with small-model guardrails. ⬜ The `ExecutionBackend` interface.
+   Structured writers are deferred.
 3. **Proposed changes:**
-   - staging
-   - summaries and review diffs (text/CSV/xlsx/docx)
-   - conflict detection
-   - atomic apply
-   - `file_versions` history with Restore and retention
-   - the `file_changes` manifest policy and its editor UI
-4. Plain-language activity steps with "Show details" for code; inline charts.
+   - ✅ staging
+   - ✅ Excel cell diffs and text diffs
+   - ✅ conflict detection
+   - ✅ atomic apply
+   - ✅ `file_versions` with Undo and 30-day retention
+   - ✅ the `file_changes` policy and editor UI
+   - ✅ Discard with feedback
+   - ✅ supersede within a reply
+   - ✅ outcomes in history
+   - ⬜ Word diffs
+   - ⬜ the read-only folder permission card
+4. ✅ Plain-language activity steps with "Show details" for code. ⬜ Inline charts (matplotlib figures as images).
 
-**Exit:** "Add today's deliveries to my PO Tracker spreadsheet" produces a reviewable change card. Applying it updates
-the file, and Restore brings back the old version.
+**Exit:** "Add today's deliveries to my PO Tracker spreadsheet" produces a reviewable change card, applying it updates
+the file, and Undo restores the old version. ✅ Met.
 
 ### Phase 3: Autonomous agents
 - Scheduler (intervals, active hours, weekdays, jitter, missed-run catch-up, concurrency cap) plus "Run now".
@@ -954,30 +1007,62 @@ delays with suggested next actions.
 
 ## 9. Testing strategy
 
+**Built** (`pytest`, 86 tests, no window or network needed):
 - **Unit tests:**
-  - manifest validation and migrations
-  - filesystem sandbox: traversal, symlinks, deny-list, Windows path quirks (drive letters, UNC paths,
-    case-insensitivity)
-  - scheduler math: active hours, jitter, sleep/wake catch-up
-  - OpenAPI → tool conversion, using real specs from our servers as fixtures (`$ref` inlining, name sanitizing,
-    read-only detection)
-  - document extraction: fixture PDFs (text, scanned, mixed, encrypted, malformed), OOXML files, page classification,
-    timeouts in the worker process
-  - extraction cache and FTS5 search: invalidation on file change, page-range reads
-  - proposed changes: staging, conflict detection (file changed since proposal), atomic apply, version snapshot and
-    restore, retention, never deleting
-  - attachments: snapshot, dedupe by hash, size limits
-  - tool-result truncation
-- **Fake servers in tests** (in-process `httpx.MockTransport`), so the agent loop is tested deterministically without
-  a real model:
-  - an OpenAI-compatible fake (scripted streaming + tool calls)
-  - a fake MCP Streamable HTTP server
-  - a fake OpenAPI server
-  - a fake document server
-- **Sandbox integration:** a `--smoke-test`-style run that boots Pyodide in the real webview, round-trips an `.xlsx`
-  through openpyxl, checks a timeout kills the worker, and confirms network access fails.
-- **Integration (opt-in):** env-var-gated tests against the real AI server and a real MCP server.
-- **CI:** ruff + pytest on Windows and macOS for every PR; packaging smoke build on tags.
+  - manifest validation
+  - config layers and `.env` parsing
+  - store and migrations
+  - folder policy: traversal, symlinks, deny-list, read vs write
+  - document extraction (text PDF, scanned page, DOCX, XLSX with dates, PPTX, unsupported/corrupt)
+  - cache and FTS5 search (extract once per version, rename detection, page ranges)
+  - proposed changes: auto-apply policy, apply, undo, conflicts, discard, retention
+  - the xlsx diff/repair script, run on the host with openpyxl
+- **LLM client** against `httpx.MockTransport`:
+  - streamed text and tool calls
+  - usage
+  - dropping rejected params
+  - non-streaming fallback
+  - auth/model errors
+  - retries
+- **Agent loop** with a scripted model (`ScriptedClient`) and a fake sandbox:
+  - reading, then answering
+  - `run_python` outputs becoming pending/applied changes
+  - access errors returned to the model
+  - read-only folders
+  - the tool budget
+  - path literals becoming inputs
+  - no-op detection
+  - superseding revisions
+  - change outcomes in history
+- **Bridge:** the same calls the UI makes (agents CRUD, avatars, chat, discard with feedback).
+- **Static UI checks:**
+  - the CSP hash matches the import map
+  - vendored files match the lock
+  - imports resolve
+  - icon names exist
+  - templates reference known servers
+- **Fixtures:** `dev/make_sample_docs.py` (PO tracker, supplier PDFs, a scan, DOCX, PPTX) via the `sample_docs`
+  fixture.
+
+**In the real webview** (run on each OS; CI-ready):
+- `--smoke-test`: the UI renders with no JS errors.
+- `--sandbox-selftest`:
+  - openpyxl and pandas round-trips
+  - in-place edits via aliases
+  - no network
+  - no host disk
+  - timeout kill and recovery
+
+**Planned:**
+- scheduler math (active hours, jitter, sleep/wake catch-up)
+- OpenAPI → tool conversion with real specs as fixtures
+- fake MCP/OpenAPI/document servers
+- extraction timeouts once it runs in a worker process
+- attachments
+- Windows path quirks (drive letters, UNC, case-insensitivity)
+- **Integration (opt-in):** env-var-gated tests against the real AI server and MCP servers.
+- **CI:** ruff + pytest + `--smoke-test` + `--sandbox-selftest` on Windows and macOS for every PR; a packaging smoke
+  build on tags.
 - **Manual QA checklist** per release: fresh install, onboarding, create agent from template, scheduled run,
   notification, start at login, upgrade over previous version.
 
@@ -991,17 +1076,18 @@ delays with suggested next actions.
 |---|---|
 | Name | **Space Agents** |
 | Python | 3.12, managed with uv |
-| UI | pywebview + Preact/htm (vendored, no npm). pywebview's localhost static server is acceptable |
+| UI | pywebview + Preact/htm (vendored, no npm), served by our small WSGI app on 127.0.0.1 |
 | Server discovery | `GET {mcp_base_url}/mcp` catalog with the user's key (server side to be added; format proposed in 2.6) |
 | Server types | Streamable HTTP MCP at `/mcp/{id}`; OpenAPI with the spec at `/mcp/{id}/openapi.json` |
 | PDF speed | Measured: `pypdfium2` extracts ~460 text-heavy pages/s on an M-series Mac, so a 1,000-page PDF takes ~2 s |
 | Document processing | **Local first:** `pypdfium2` + stdlib OOXML, cached, with FTS5 search. The GPU document server (`convert_document`, VLM optional) stays available to agents for scans and hard cases; automatic routing comes later (skills) |
-| Code execution | **Pyodide** in a Web Worker: sandboxed Python, copies in, proposals out. Docker rejected as the default (admin rights, licensing, weight) |
-| File writes | **Proposed changes:** new files are allowed by default; edits to existing files need approval by default; every overwrite is versioned; no deletes |
+| Code execution | **Pyodide** in a Web Worker: sandboxed Python (`run_python`), copies in, proposals out. Docker rejected as the default (admin rights, licensing, weight) |
+| Small-model guardrails | Make the sandbox meet models halfway (path mapping, revisions, diff feedback, date repair) rather than relying on prompts alone; put key instructions in tool results |
+| File writes | **Proposed changes:** new files are allowed by default; edits to existing files need approval by default; every overwrite is versioned; no deletes. Discard can carry feedback that the agent acts on |
 | Attachments | Drag-and-drop or upload in chat; snapshotted into app data; per-file read grant for that agent |
 | Identity | One API key per user; M365 servers do Azure OAuth + OBO server-side; no sign-in flow in the app |
 | Tool execution | Client-side tool loop: the app runs all tool calls; the gateway/vLLM only generates (see 3.2) |
-| Models | Large open models (e.g. Inkling Large, GLM 5.3) with up to 1M context; no default model for now |
+| Models | Large open models (e.g. Inkling Large, GLM 5.3) with up to 1M context. For testing: OpenAI `gpt-5-nano` via `.env`. The first entry in the model list is the default for agents without one |
 | Endpoints | `llm_base_url` and `mcp_base_url` configured separately: build defaults → remote config → user override |
 | Code signing | Handled with IT/Security once a working build exists |
 | Git | The maintainer makes commits; tooling/assistants don't commit |
@@ -1019,11 +1105,8 @@ delays with suggested next actions.
 4. **Context length in `/api/models`:** does the gateway expose each model's `max_model_len`? If not, a small
    per-model override map in the remote config works.
 5. **License:** Apache-2.0 (includes a patent grant, common for org-backed projects) or MIT.
-6. **Sandbox spike results** (Phase 2b, step 1):
-   - Pyodide cold start in WKWebView and WebView2
-   - whether pywebview's local server accepts our extra token-scoped routes, or whether we serve the UI from our own
-     small WSGI app (pywebview supports passing one)
-   - the `'wasm-unsafe-eval'` CSP on both webviews
+6. **Sandbox on Windows:** run `--sandbox-selftest` in WebView2. On macOS (WKWebView) all checks pass, cold start is
+   ~3 s, and we serve the UI from our own WSGI app.
 7. **FTS5 availability:** ✅ confirmed on macOS (uv's CPython 3.12, SQLite 3.53.1). Still to confirm on Windows; if
    missing, fall back to a simple LIKE scan.
 

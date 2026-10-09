@@ -51,8 +51,10 @@ export function SettingsDialog() {
         <div class="settings-section">
           <h3>Connection</h3>
           <${Notice} icon="info">
-            Not connected yet. Sign-in and live connections arrive in Phase 1. Values from a <code>.env</code> file or
-            environment variables take priority and can't be changed here.
+            ${b.llm?.ready
+              ? html`Connected to the model gateway${b.llm.default_model ? ` (default model: ${b.llm.default_model})` : ""}. `
+              : html`No model gateway is set up yet, so agents send placeholder replies. `}
+            Values from a <code>.env</code> file or environment variables take priority and can't be changed here.
           <//>
           ${endpoints.map(
             (c) => html`<${Field} label=${html`${c.label} <${SourceChip} source=${c.source} />`} help=${c.help}>

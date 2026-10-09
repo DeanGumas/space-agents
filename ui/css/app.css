@@ -1605,3 +1605,29 @@ pre.text-diff {
 .sidebar-footer .conn .dot.ready {
   background: var(--success);
 }
+
+.deny-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.deny-box label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.deny-box textarea.input {
+  min-height: 64px;
+}
+.deny-box .muted,
+.change-card .muted {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.deny-box .hint {
+  margin-top: 6px;
+  font-size: 12px;
+}

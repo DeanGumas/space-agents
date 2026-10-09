@@ -85,12 +85,23 @@ Every output file becomes a row in `changes`. Policy comes from the agent's `fil
 - **New files:** saved automatically, or "ask".
 - **Existing files:** "ask" (the default), or applied automatically with a backup.
 
-Statuses: `pending → applied | discarded | conflicted → applied`, and `applied → undone`.
+Statuses: `pending → applied | discarded`, `pending → conflicted → applied ("Apply anyway") | discarded`, and
+`applied → undone`. A revision within the same reply replaces the pending proposal (one card per file per reply).
 
 **Apply:**
 1. Re-hash the target. If it changed since the proposal, mark it `conflicted`; the user can "Apply anyway".
 2. Snapshot the current file into `data/history/<sha256>` (`file_versions` table).
 3. Write via temp file + `os.replace`.
+
+**Discard** opens a "What should be different?" box on the card:
+- **Empty:** just discards.
+- **With feedback:** the change is discarded and the feedback is posted as the user's next message, so the agent
+  revises and a new card appears (`bridge.discard_change`).
+
+Either way the agent learns the outcome. When history is built, each earlier reply is annotated with what happened
+to its file changes ("discarded by the user", "applied", "undone", …), because the user acts on cards outside the
+conversation. Tool results also tell the model to point the user to the card rather than asking "should I apply
+it?". Small models follow instructions in tool results more reliably than ones in the system prompt.
 
 **Undo** restores the snapshot, after snapshotting the current file too. A *created* file can't be undone, because
 that would be a delete, and nothing is ever deleted. History older than 30 days is pruned on startup.

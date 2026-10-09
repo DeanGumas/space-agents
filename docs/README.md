@@ -19,7 +19,7 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - the tool loop
   - local document reading/search
   - the Pyodide sandbox
-  - proposed changes with Apply / Discard / Undo
+  - proposed changes with Apply / Undo, and Discard with feedback that the agent acts on
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
 - **Not yet built:**
@@ -27,5 +27,6 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - attachments (drag-and-drop)
   - onboarding and keychain
   - scheduled runs
+  - the "Allow writing to this folder?" permission card
 
 Keep these docs current: when a change alters how pieces connect, update the matching doc in the same change.

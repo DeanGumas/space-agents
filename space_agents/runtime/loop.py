@@ -33,6 +33,13 @@ from space_agents.tools.registry import ToolBox
 log = logging.getLogger(__name__)
 
 HISTORY_MESSAGES = 20
+CHANGE_OUTCOMES = {
+    "pending": "proposed, still waiting for the user's review",
+    "applied": "applied by the user",
+    "discarded": "discarded by the user",
+    "conflicted": "not applied: the file changed after it was proposed",
+    "undone": "applied, then undone by the user",
+}
 TOOL_RESULT_CHARS = 12_000
 
 
@@ -66,11 +73,24 @@ class AgentRunner:
 
     def _history(self, agent_id: str, before_id: int) -> list[dict[str, Any]]:
         rows = self._store.query(
-            "SELECT role, content FROM (SELECT * FROM messages WHERE agent_id = ? AND id < ? AND content != ''"
+            "SELECT id, role, content FROM (SELECT * FROM messages WHERE agent_id = ? AND id < ? AND content != ''"
             " ORDER BY id DESC LIMIT ?) ORDER BY id",
             (agent_id, before_id, HISTORY_MESSAGES),
         )
-        return [{"role": "assistant" if r["role"] == "agent" else "user", "content": r["content"]} for r in rows]
+        # Tell the model what became of the file changes it proposed earlier (applied, discarded, …): the user acts on
+        # them in the UI, outside the conversation.
+        changes = self._changes.for_messages([r["id"] for r in rows if r["role"] == "agent"])
+        history = []
+        for r in rows:
+            content = r["content"]
+            if r["role"] == "agent" and changes.get(r["id"]):
+                notes = "\n".join(
+                    f"- {'Update' if c['kind'] == 'modify' else 'Create'} {c['target']}: {CHANGE_OUTCOMES[c['status']]}"
+                    for c in changes[r["id"]]
+                )
+                content += f"\n\n[File changes from this reply]\n{notes}"
+            history.append({"role": "assistant" if r["role"] == "agent" else "user", "content": content})
+        return history
 
     async def chat(self, agent: Manifest, message_id: int) -> None:
         """Answer the latest user message for `agent`, writing into the (already created) agent message."""

@@ -163,7 +163,7 @@ async def test_run_python_output_becomes_pending_change(env, tmp_path):
     assert by_name["summary.csv"]["status"] == "applied"  # new file: saved by default
     assert (work / "PO Tracker.xlsx").read_bytes() == original
     result = client.requests[1]["messages"][-1]["content"]
-    assert "waiting for the user to review" in result and "Created" in result
+    assert "change card" in result and "Created" in result
 
 
 async def test_access_errors_are_returned_to_the_model(env, tmp_path):
@@ -291,3 +291,21 @@ async def test_revisions_supersede_the_pending_change_and_build_on_it(env, tmp_p
     assert (work / "notes.csv").read_text() == "v0"
     env[3].apply(changes[0]["id"])
     assert (work / "notes.csv").read_text() == "v2"
+
+
+async def test_history_tells_the_model_what_happened_to_its_changes(env, tmp_path):
+    store, events, docs, changes, config, agent, work = env
+    sandbox = FakeSandbox(tmp_path, {"PO Tracker.xlsx": "edited"})
+    edit = call("run_python", description="d", code="c", input_files=["PO Tracker.xlsx"])
+    client = ScriptedClient(
+        [ChatResult(tool_calls=[edit]), ChatResult(content="Proposed."), ChatResult(content="Revised plan.")]
+    )
+    runner = make_runner(env, client, sandbox)
+    first = await ask(env, runner, "update it")
+    change = changes.for_messages([first["id"]])[first["id"]][0]
+    changes.discard(change["id"])
+    await ask(env, runner, "I discarded your proposed change. Use Late instead.")
+    history = client.requests[-1]["messages"]
+    earlier_reply = next(m for m in history if m["role"] == "assistant" and "Proposed." in m["content"])
+    assert "[File changes from this reply]" in earlier_reply["content"]
+    assert "PO Tracker.xlsx: discarded by the user" in earlier_reply["content"]

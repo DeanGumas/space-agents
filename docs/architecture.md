@@ -48,8 +48,7 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 
 1. The Composer calls `sendMessage()`, which calls `call("send_message", id, text)`.
 2. `Api.send_message` validates the text, stores the user message, and stores an empty agent message with status
-   `streaming`. It marks the agent busy, submits `dummy_reply(...)` to the core loop, and returns both messages
-   immediately.
+   `streaming`. It marks the agent busy, submits the reply to the core loop, and returns both messages immediately.
 3. With a model configured (`llm_base_url` + `api_key`), `AgentRunner.chat` (`runtime/loop.py`):
    1. builds the system prompt and history
    2. streams the model's answer (`message.delta`)
@@ -59,17 +58,45 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
    Without a model, `runtime/dummy.py` streams a placeholder.
 4. "Stop" cancels the run's future; the message is saved as stopped.
 
+## Request flow: reviewing a proposed change
+
+Files an agent produces become *proposed changes* (`changes.py`; details in
+[documents-and-sandbox.md](documents-and-sandbox.md)). The change card calls:
+
+| Card action | Bridge call | Result |
+|---|---|---|
+| Apply / Apply anyway | `apply_change(id, force)` | Hash check → snapshot to `history/` → atomic write → `change.updated` |
+| Discard… (no feedback) | `discard_change(id)` | Status `discarded`; staged file deleted |
+| Discard & tell agent | `discard_change(id, feedback)` | As above, then the feedback is posted as the user's next message and a reply starts (same path as `send_message`) |
+| Undo | `undo_change(id)` | Current file snapshotted, previous version restored |
+| Show in folder | `reveal_change(id)` | Opens Finder/Explorer at the file |
+
+The agent learns outcomes when its history is built: earlier replies are annotated with what happened to their
+changes.
+
+## Bridge endpoints
+
+| Area | Methods |
+|---|---|
+| Lifecycle | `ping`, `ui_ready`, `bootstrap` |
+| Agents | `list_agents`, `save_agent`, `delete_agent` |
+| Chat | `list_messages` (with tool calls and changes), `send_message`, `stop_agent` |
+| Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
+| Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
+| Files & settings | `pick_folder`, `set_theme`, `save_endpoint_overrides`, `open_data_folder` |
+
 ## Code map
 
 ```
 space_agents/
-  main.py        entry point: CLI args, logging, wiring, window creation, --smoke-test
+  __main__.py    `python -m space_agents`: run(), then flush logs and hard-exit (see Shutdown below)
+  main.py        CLI args, logging, wiring, window creation, --smoke-test, --sandbox-selftest
   bridge.py      Api: every method the UI can call
   core.py        Core (asyncio thread) + EventBus (batched UI events)
   config.py      layered config resolution (see configuration.md)
   settings.py    settings.json (theme, endpoint overrides); atomic JSON writes
   manifest.py    agent manifest dataclasses + validation (see agents.md)
-  store.py       agents/*.json, avatars/*.png, space.db (messages)
+  store.py       agents/*.json, avatars/*.png, space.db schema/migrations + query helpers
   catalog.py     tool-server catalog (dev file for now) + agent templates
   paths.py       resource dir (dev vs PyInstaller bundle), per-OS data/log dirs
   defaults.json  build-time defaults (org URLs get baked in here)
@@ -84,6 +111,8 @@ space_agents/
 ui/              front end (see ui.md)
 templates/agents/            starter agent manifests
 dev/catalog.json             offline stand-in for GET /mcp
+dev/make_sample_docs.py      realistic test documents (also pytest fixtures)
+tests/                       pytest suite (see development.md)
 scripts/vendor.py            download + verify front-end libs
 scripts/update_csp.py        keep the CSP hash in sync with the import map
 ```
@@ -93,4 +122,22 @@ scripts/update_csp.py        keep the CSP hash in sync with the import map
 - **Manifests and settings** are written atomically (temp file + `os.replace`).
 - **SQLite** runs in WAL mode behind a single lock-guarded connection. Schema migrations are a list in `store.py`,
   applied in order using `PRAGMA user_version`.
-- **On startup**, messages left `streaming` (crash or quit mid-reply) are marked `error`.
+- **On startup**, messages left `streaming` (crash or quit mid-reply) are marked `error`. Leftover sandbox
+  `workspaces/` are deleted, and file history older than 30 days is pruned.
+- **Proposed changes** are applied with a hash check, a snapshot of the previous version, and a temp file +
+  `os.replace`, so a crash can't leave a half-written user file.
+
+| Table | Contents |
+|---|---|
+| `messages` | Chat history (+ token usage per agent reply) |
+| `tool_calls` | Every tool call: name, arguments, summary, truncated result, status, duration (the audit trail) |
+| `changes` | Proposed changes and their status |
+| `file_versions` | Previous versions of overwritten files (blobs in `history/`) |
+| `doc_cache`, `doc_pages`, `doc_fts` | Extracted document text by content hash, plus the FTS5 search index |
+
+## Shutdown
+
+`run()` stops the core loop, closes the document executor and the database, and returns. `__main__.py` then flushes
+logs and calls `os._exit`. pywebview runs bridge calls on non-daemon threads that wait for the window to acknowledge
+their return value, so a call that was in flight when the window closed would otherwise block interpreter exit
+forever.

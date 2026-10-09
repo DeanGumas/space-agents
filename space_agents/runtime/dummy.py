@@ -1,5 +1,5 @@
-"""Phase 0 stand-in for the agent loop: streams a canned reply so the chat UI and the event path can be exercised
-without a model. Replaced by runtime/loop.py in Phase 1."""
+"""Placeholder replies used when no model is configured (no llm_base_url/api_key): streams a canned reply so the
+chat UI and the event path can still be exercised. With a model, runtime/loop.py handles replies."""
 
 from __future__ import annotations
 

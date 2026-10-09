@@ -110,12 +110,16 @@ export async function deleteAgent(id) {
 
 export async function sendMessage(agentId, text) {
   const { user_message, agent_message } = await call("send_message", agentId, text);
+  addExchange(agentId, user_message, agent_message);
+}
+
+function addExchange(agentId, userMessage, agentMessage) {
   const list = messages.value[agentId] || [];
   batch(() => {
-    messages.value = { ...messages.value, [agentId]: [...list, user_message, agent_message] };
+    messages.value = { ...messages.value, [agentId]: [...list, userMessage, agentMessage] };
     patchAgent(agentId, {
       status: "responding",
-      last_message: { role: "user", preview: text.slice(0, 160), created_at: user_message.created_at },
+      last_message: { role: "user", preview: userMessage.content.slice(0, 160), created_at: userMessage.created_at },
     });
   });
 }
@@ -170,6 +174,18 @@ export async function stopAgent(agentId) {
 }
 
 // ---------- proposed changes ----------
+
+/** Discard a proposed change; with feedback, the agent is told and starts revising. Returns true on success. */
+export async function discardChange(change, feedback = "") {
+  try {
+    const res = await call("discard_change", change.id, feedback);
+    if (res.user_message) addExchange(change.agent_id, res.user_message, res.agent_message);
+    return true;
+  } catch (e) {
+    toastError(e);
+    return false;
+  }
+}
 
 /** action: "apply" | "discard" | "undo" | "reveal". The UI updates from the change.updated event. */
 export async function changeAction(action, change, force = false) {

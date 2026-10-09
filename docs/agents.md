@@ -12,7 +12,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `avatar.emoji` / `avatar.color` | Emoji on a colored tile; `emoji: null` falls back to initials | General → avatar |
 | `avatar.image` | `avatars/<id>.png`, managed by the store, **never set by the UI** | General → avatar → Picture |
 | `instructions` | Standing orders (system prompt), plain English | Instructions |
-| `model.name`, `model.temperature` | Model id from `/models`; temperature is shown as "Creativity" | Model |
+| `model.name`, `model.temperature` | Model id (empty → the first entry of the `models` setting); temperature is shown as "Creativity" and dropped automatically for models that reject it (e.g. GPT-5) | Model |
 | `mcp_servers[]` | `{id, tools: "read_only" \| [names]}`. The document server is implicit and not listed | Data sources |
 | `filesystem[]` | `{path, access: "read" \| "read_write"}`. Paths under home are stored as `~/…` | Files & folders |
 | `file_changes` | `new_files: allow\|ask`, `existing_files: ask\|allow_with_backup` (see documents-and-sandbox.md) | Files & folders |
@@ -31,7 +31,9 @@ on the tab that owns it.
 <data dir>/
   agents/<id>.json     manifest (written atomically)
   avatars/<id>.png     optional picture, 256×256 PNG
-  space.db             messages (later: runs, tool calls, notifications, memory)
+  space.db             messages, tool calls, proposed changes, file versions, document cache (architecture.md)
+  staging/, history/   proposed-change files and previous versions (documents-and-sandbox.md)
+  workspaces/          per-run sandbox folders (temporary)
   settings.json        theme + endpoint overrides
   logs/                when the data dir is overridden
 ```

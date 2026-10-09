@@ -311,6 +311,11 @@ class ToolBox:
                 lines.append("Files:")
                 for out in result.outputs:
                     lines.append("- " + await self._propose(out, inputs, args, description, tool_call_id, proposed))
+                if any(c["status"] in ("pending", "conflicted") for c in proposed):
+                    lines.append(
+                        "(For your reply: tell the user to review the change card below and click Apply or Discard. "
+                        "Don't ask whether to apply it yourself, and don't mention in/ or out/ folders.)"
+                    )
             elif result.outputs:
                 lines.append("Output files were not saved because the code failed.")
             return ToolOutcome("\n".join(lines), description, ok=result.ok, changes=proposed)
@@ -398,7 +403,7 @@ class ToolBox:
         verb = "Updated" if change["kind"] == "modify" else "Created"
         state = {
             "applied": "saved",
-            "pending": "waiting for the user to review and apply it",
+            "pending": "proposed; the user reviews it on the change card shown under your reply",
             "conflicted": "the file changed in the meantime; the user must decide",
         }.get(change["status"], change["status"])
         return f"{verb} {change['target']}: {state}.{_describe(details)}"
