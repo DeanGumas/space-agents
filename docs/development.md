@@ -86,5 +86,8 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
   to *Read & write* under Edit → Files & folders.
 - **A custom script that calls `main.run()` hangs on exit:** call `os._exit()` afterwards, like `__main__.py` does
   (see Shutdown in architecture.md).
+- **No desktop notifications on macOS:** until the app is packaged, they're sent via `osascript` and attributed to
+  "Script Editor". Allow notifications for Script Editor in System Settings → Notifications. The log shows
+  "Desktop notification sent: …" for each one.
 - **macOS log noise like `NSWindow warning: adding an unknown subview: <WKInspectorWKWebView>`:** harmless. It
   appears when the web inspector opens.

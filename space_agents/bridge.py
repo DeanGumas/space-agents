@@ -30,6 +30,7 @@ from space_agents.config import Config
 from space_agents.core import Core, EventBus
 from space_agents.manifest import Manifest, ManifestError
 from space_agents.platform.appearance import open_in_file_manager
+from space_agents.platform.notify import Notifier
 from space_agents.runtime.dummy import dummy_reply
 from space_agents.runtime.loop import AgentRunner
 from space_agents.sandbox.pyodide import PyodideSandbox
@@ -61,6 +62,19 @@ def endpoint(fn: Callable[..., Any]) -> Callable[..., dict[str, Any]]:
             return {"ok": False, "error": "Something went wrong. Details are in the log."}
 
     return wrapper
+
+
+def approval_summary(changes: list[dict[str, Any]]) -> str:
+    """One sentence for the desktop notification, e.g. 'Update PO Tracker.xlsx: mark 3 Acme POs late (+1 more file).'"""
+    first = changes[0]
+    verb = "Update" if first["kind"] == "modify" else "Create"
+    description = str((first.get("summary") or {}).get("description") or "").strip().rstrip(".")
+    sentence = description if first["name"].lower() in description.lower() else f"{verb} {first['name']}"
+    if description and sentence is not description:
+        sentence += f": {description[0].lower()}{description[1:]}"
+    if len(changes) > 1:
+        sentence += f" (+{len(changes) - 1} more file{'s' if len(changes) > 2 else ''})"
+    return sentence + "."
 
 
 def clone_name(name: str, existing: set[str], limit: int = 60) -> str:
@@ -97,6 +111,7 @@ class Api:
         sandbox: PyodideSandbox,
         runner: AgentRunner,
         changes: ChangeManager,
+        notifier: Notifier | None = None,
         on_ui_ready: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._config = config
@@ -108,7 +123,10 @@ class Api:
         self._sandbox = sandbox
         self._runner = runner
         self._changes = changes
+        self._notifier = notifier or Notifier()
         self._on_ui_ready = on_ui_ready
+        self._ui_focused = True  # reported by the UI (window focus/visibility)
+        self._ui_viewing: str | None = None  # agent whose channel is open
         self._window: webview.Window | None = None
         self._busy: set[str] = set()
         self._tasks: dict[str, concurrent.futures.Future] = {}
@@ -146,6 +164,7 @@ class Api:
             "config": self._config.describe(),
             "data_dir": str(self._config.data_dir),
             "agents": self._agent_views(),
+            "attention": self._changes.attention(),
             "blank_manifest": Manifest(name="").to_dict(),
             "templates": load_templates(paths.templates_dir()),
             "catalog": load_catalog_file(self._config.catalog_file),
@@ -216,6 +235,7 @@ class Api:
         if agent_id in self._busy:
             raise UserError("This agent is busy. Try again in a moment.")
         self._store.delete_agent(agent_id)
+        self._changes.emit_attention()  # its pending proposals are gone
 
     # --- chat ---------------------------------------------------------------------------------------------------
 
@@ -240,8 +260,11 @@ class Api:
             raise UserError("This agent is still responding.")
         return self._start_reply(self._store.get_agent(agent_id), text)
 
-    def _start_reply(self, agent: Manifest, text: str) -> dict[str, Any]:
-        """Store the user's message and start the agent's reply in the background."""
+    def _start_reply(self, agent: Manifest, text: str, revising: bool = False) -> dict[str, Any]:
+        """Store the user's message and start the agent's reply in the background.
+
+        `revising`: the reply answers feedback on a discarded change, so the agent stays in Activity while it works.
+        """
         agent_id = agent.id
         user_msg = self._store.add_message(agent_id, "user", text)
         reply = self._store.add_message(agent_id, "agent", "", status="streaming")
@@ -253,12 +276,50 @@ class Api:
             future = self._core.submit(dummy_reply(self._store, self._events, agent, text, reply["id"]))
         self._tasks[agent_id] = future
 
+        if revising:
+            self._changes.set_revising(agent_id, True)
+
         def finished(_f: concurrent.futures.Future) -> None:
             self._busy.discard(agent_id)
             self._tasks.pop(agent_id, None)
+            try:
+                if revising:
+                    self._changes.set_revising(agent_id, False)
+                self._notify_if_awaiting_approval(agent, reply["id"])
+            except Exception:  # a notification problem must never break chat
+                log.exception("Post-reply notification failed")
 
         future.add_done_callback(finished)
         return {"user_message": user_msg, "agent_message": reply}
+
+    def _notify_if_awaiting_approval(self, agent: Manifest, message_id: int) -> None:
+        """After a reply: if it left changes for the user to approve, pop up a desktop notification.
+
+        Skipped when the user is already looking at that agent's conversation (the card is right in front of them)
+        or when the agent's desktop notifications are turned off.
+        """
+        pending = [
+            c
+            for c in self._changes.for_messages([message_id]).get(message_id, [])
+            if c["status"] in ("pending", "conflicted")
+        ]
+        if not pending or not agent.notifications.desktop:
+            return
+        if self._ui_focused and self._ui_viewing == agent.id:
+            return
+        title, body = f"{agent.name} requests approval", approval_summary(pending)
+        sent = self._notifier.notify(title, body)
+        log.info("Desktop notification %s: %s | %s", "sent" if sent else "unavailable", title, body)
+
+    @endpoint
+    def set_ui_state(self, focused: bool, viewing: str | None = None) -> None:
+        """The UI reports whether the window is in front and which agent's conversation is open."""
+        self._ui_focused = bool(focused)
+        self._ui_viewing = viewing if isinstance(viewing, str) else None
+
+    @endpoint
+    def attention(self) -> list[dict[str, Any]]:
+        return self._changes.attention()
 
     @endpoint
     def stop_agent(self, agent_id: str) -> bool:
@@ -284,7 +345,7 @@ class Api:
         if not feedback:
             return {"change": change}
         text = f"I discarded your proposed change to {change['name']}. Here's what should be different:\n\n{feedback}"
-        return {"change": change, **self._start_reply(self._store.get_agent(agent_id), text)}
+        return {"change": change, **self._start_reply(self._store.get_agent(agent_id), text, revising=True)}
 
     @endpoint
     def undo_change(self, change_id: str) -> dict[str, Any]:

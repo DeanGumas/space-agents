@@ -6,7 +6,8 @@ import { Sidebar } from "./views/Sidebar.js";
 import { Channel } from "./views/Channel.js";
 import { AgentEditor } from "./views/AgentEditor.js";
 import { SettingsDialog } from "./views/SettingsDialog.js";
-import { Welcome, NewAgentDialog, Activity } from "./views/Welcome.js";
+import { Welcome, NewAgentDialog } from "./views/Welcome.js";
+import { Activity } from "./views/Activity.js";
 import {
   boot,
   bootError,

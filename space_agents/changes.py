@@ -42,6 +42,7 @@ class ChangeManager:
         self.history_dir = data_dir / "history"
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.history_dir.mkdir(parents=True, exist_ok=True)
+        self._revising: set[str] = set()  # agents revising after the user discarded a change with feedback
 
     # --- queries ------------------------------------------------------------------------------------------------
 
@@ -229,4 +230,33 @@ class ChangeManager:
 
     def _emit(self, change: dict[str, Any]) -> dict[str, Any]:
         self._events.emit("change.updated", agent_id=change["agent_id"], message_id=change["message_id"], change=change)
+        self.emit_attention()
         return change
+
+    # --- "needs your attention" (Activity tab, sidebar badge) -----------------------------------------------------
+
+    def attention(self) -> list[dict[str, Any]]:
+        """One entry per agent waiting on the user: it has unapplied proposals, or it's revising after feedback.
+
+        An entry disappears once nothing is pending and the agent has finished working.
+        """
+        rows = self._store.query(
+            "SELECT * FROM changes WHERE status IN ('pending', 'conflicted') ORDER BY created_at, rowid"
+        )
+        entries: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            entry = entries.setdefault(r["agent_id"], {"agent_id": r["agent_id"], "changes": [], "updated_at": ""})
+            entry["changes"].append(self.view(r))
+            entry["updated_at"] = max(entry["updated_at"], r["updated_at"])
+        for agent_id in self._revising:
+            entries.setdefault(agent_id, {"agent_id": agent_id, "changes": [], "updated_at": now_iso()})
+        for entry in entries.values():
+            entry["revising"] = entry["agent_id"] in self._revising
+        return sorted(entries.values(), key=lambda e: e["updated_at"], reverse=True)
+
+    def set_revising(self, agent_id: str, revising: bool) -> None:
+        (self._revising.add if revising else self._revising.discard)(agent_id)
+        self.emit_attention()
+
+    def emit_attention(self) -> None:
+        self._events.emit("attention.updated", attention=self.attention())

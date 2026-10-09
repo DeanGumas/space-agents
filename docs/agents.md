@@ -17,7 +17,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `filesystem[]` | `{path, access: "read" \| "read_write"}`. Paths under home are stored as `~/…` | Files & folders |
 | `file_changes` | `new_files: allow\|ask`, `existing_files: ask\|allow_with_backup` (see documents-and-sandbox.md) | Files & folders |
 | `schedule`, `task` | When to run and what to do each run (task required if the schedule is on) | Schedule |
-| `notifications` | Desktop popups and minimum level (`info` / `action` / `urgent`) | Schedule |
+| `notifications` | `desktop`: pop up when the agent needs approval (and, later, when a scheduled run finds something); `min_level` for runs (`info` / `action` / `urgent`) | Schedule |
 | `memory`, `limits` | Notes between runs; per-run tool-call and time caps | Advanced |
 | `permissions.external_actions` | Reserved; always `never` in v1 | Advanced (disabled) |
 

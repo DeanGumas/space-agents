@@ -4,7 +4,7 @@ import { html } from "htm/preact";
 import { useState, useRef, useLayoutEffect, useEffect } from "preact/hooks";
 import { Avatar, Icon } from "../components/common.js";
 import { ActivitySteps, ChangeCards } from "../components/Activity.js";
-import { messages, sendMessage, stopAgent, openEditor, toastError, boot } from "../state.js";
+import { messages, sendMessage, stopAgent, openEditor, toastError, boot, focusChange } from "../state.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { cx, formatTime, formatDay, isSameDay, scheduleSummary } from "../lib/util.js";
 import { toDraft } from "./AgentEditor.js";
@@ -65,6 +65,19 @@ function Timeline({ agent, list, onEdit }) {
   useEffect(() => {
     stick.current = true;
   }, [agent.id]);
+
+  // Opened from Activity: scroll to the change card and flash it, instead of pinning to the bottom.
+  useEffect(() => {
+    const id = focusChange.value;
+    if (!id || list === undefined) return;
+    const el = document.getElementById(`change-${id}`);
+    focusChange.value = null;
+    if (!el) return;
+    stick.current = false;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1600);
+  }, [focusChange.value, list]);
 
   return html`
     <div class="timeline" ref=${ref} onScroll=${onScroll}>

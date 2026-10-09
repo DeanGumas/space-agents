@@ -2,6 +2,7 @@ import { html } from "htm/preact";
 import { Avatar, Icon, Logo } from "../components/common.js";
 import {
   agents,
+  attention,
   boot,
   view,
   unread,
@@ -48,7 +49,10 @@ export function Sidebar() {
         >
           <${Icon} name="inbox" />
           <span class="label">Activity</span>
-          <span class="soon">Soon</span>
+          ${attention.value.length > 0 &&
+          html`<span class="badge" title=${`${attention.value.length} waiting for your approval`}>
+            ${attention.value.length}
+          </span>`}
         </button>
 
         <div class="section-title">

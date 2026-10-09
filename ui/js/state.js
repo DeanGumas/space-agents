@@ -2,7 +2,7 @@
 // Components read signals directly (`agents.value`) and re-render automatically when they change.
 // All server interaction goes through call() from api.js; pushed events are applied in handleEvent().
 
-import { signal, computed, batch } from "@preact/signals";
+import { signal, computed, batch, effect } from "@preact/signals";
 import { call, onEvent, ApiError } from "./api.js";
 import { applyTheme } from "./lib/theme.js";
 
@@ -15,6 +15,8 @@ export const unread = signal({}); // agentId -> count
 export const theme = signal("system");
 export const dialog = signal(null); // {kind: "new"} | {kind: "editor", agentId?, draft} | {kind: "settings"}
 export const toasts = signal([]);
+export const attention = signal([]); // agents waiting on the user: [{agent_id, changes, revising, updated_at}]
+export const focusChange = signal(null); // change id to scroll to once its conversation is open
 export const contextMenu = signal(null); // {x, y, title?, items: [{label, icon, onSelect} | {divider: true}]}
 
 // Sidebar width: draggable between SIDEBAR_MIN and SIDEBAR_MAX; narrower snaps to an icon-only rail.
@@ -51,6 +53,7 @@ export async function init() {
       boot.value = data;
       agents.value = data.agents;
       theme.value = data.theme;
+      attention.value = data.attention || [];
       const saved = data.ui?.sidebar_width;
       if (saved) {
         sidebarWidth.value = saved;
@@ -128,9 +131,10 @@ export async function sendMessage(agentId, text) {
 }
 
 function addExchange(agentId, userMessage, agentMessage) {
-  const list = messages.value[agentId] || [];
+  const list = messages.value[agentId];
   batch(() => {
-    messages.value = { ...messages.value, [agentId]: [...list, userMessage, agentMessage] };
+    // Only extend a conversation that's already loaded; otherwise it loads in full when opened.
+    if (list) messages.value = { ...messages.value, [agentId]: [...list, userMessage, agentMessage] };
     patchAgent(agentId, {
       status: "responding",
       last_message: { role: "user", preview: userMessage.content.slice(0, 160), created_at: userMessage.created_at },
@@ -173,6 +177,9 @@ function handleEvent(ev) {
     case "change.updated":
       updateMessage(ev.agent_id, ev.message_id, (m) => ({ ...m, changes: upsert(m.changes, ev.change) }));
       break;
+    case "attention.updated":
+      attention.value = ev.attention;
+      break;
     default:
       console.debug("Unhandled event", ev);
   }
@@ -212,6 +219,29 @@ export async function changeAction(action, change, force = false) {
     toastError(e);
   }
 }
+
+// ---------- activity / attention ----------
+
+/** Open an agent's conversation and scroll to one of its change cards. */
+export async function openChange(agentId, changeId) {
+  focusChange.value = changeId;
+  await selectAgent(agentId);
+}
+
+// Tell Python whether the window is in front and which conversation is open, so desktop notifications are skipped
+// when the user is already looking at the agent that needs them.
+function reportUiState() {
+  const focused = document.hasFocus() && document.visibilityState === "visible";
+  const viewing = view.value.kind === "agent" ? view.value.id : null;
+  call("set_ui_state", focused, viewing).catch(() => {});
+}
+window.addEventListener("focus", reportUiState);
+window.addEventListener("blur", reportUiState);
+document.addEventListener("visibilitychange", reportUiState);
+effect(() => {
+  view.value; // re-run when the open conversation changes
+  reportUiState();
+});
 
 // ---------- sidebar width ----------
 

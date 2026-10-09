@@ -1774,3 +1774,64 @@ body.resizing .main {
   margin: 4px 6px;
   background: var(--border);
 }
+
+/* ---------- Activity (things waiting on the user) ---------- */
+
+.nav-item .badge {
+  margin-left: auto;
+}
+.sidebar.compact .nav-item {
+  position: relative;
+}
+.sidebar.compact .nav-item .badge {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 16px;
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+}
+.activity-list {
+  padding: 16px 20px 24px;
+}
+.attn-entry {
+  max-width: 760px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+.attn-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.attn-who {
+  flex: 1;
+  min-width: 0;
+}
+.attn-who .name {
+  font-weight: 700;
+}
+.attn-who .sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.attn-entry .change-cards {
+  margin-top: 12px;
+}
+.change-card.flash {
+  animation: flash 1.6s ease-out;
+}
+@keyframes flash {
+  0%,
+  30% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+}

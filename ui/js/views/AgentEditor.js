@@ -543,7 +543,7 @@ function ScheduleTab({ draft, set, err }) {
     <//>
     <${SwitchRow}
       title="Desktop notifications"
-      help="Pop up a notification when a run finds something."
+      help="Pop up a notification when it needs your approval or a run finds something."
       on=${draft.notifications.desktop}
       onChange=${(v) => set("notifications.desktop", v)}
     />

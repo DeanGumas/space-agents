@@ -79,7 +79,7 @@ function ChangeCard({ change }) {
     if (ok) setDenying(false);
   };
   return html`
-    <div class=${cx("change-card", change.status)}>
+    <div class=${cx("change-card", change.status)} id=${`change-${change.id}`}>
       <div class="change-head">
         <span class="change-icon"><${Icon} name=${FILE_ICONS[ext] || "file"} /></span>
         <div class="change-title">

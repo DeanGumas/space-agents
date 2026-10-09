@@ -199,7 +199,14 @@ Layout (Slack-style):
 ```
 
 - **Sidebar:** agent avatar (emoji or initials + color), name, status dot (idle / running / error / paused),
-  last-activity snippet and relative time, unread badge. "Activity" is a cross-agent inbox of notifications.
+  last-activity snippet and relative time, unread badge. "Activity" is a cross-agent inbox of things waiting on the
+  user.
+  - ✅ **Activity:**
+    - One entry per agent awaiting approval, with its change cards (Apply/Discard right there) and "Open
+      conversation".
+    - Entries clear once nothing is pending and the agent is done (including after revising on feedback).
+    - A red count badge on the nav item, hidden at 0.
+    - Scheduled-run reports join this inbox in Phase 3.
   - ✅ **Resizable:** drag the edge, snap to an icon-only rail, Ctrl/⌘ B toggle; the width is remembered.
   - ✅ **Right-click an agent:** Edit agent, or Duplicate (copies its setup as "<name> (Clone)").
 - **Channel view:** a single timeline mixing chat messages and run-report cards. Tool calls are collapsed by default
@@ -964,8 +971,12 @@ the file, and Undo restores the old version. ✅ Met.
 - Scheduler (intervals, active hours, weekdays, jitter, missed-run catch-up, concurrency cap) plus "Run now".
 - `task` field, `post_report`, report cards, Activity inbox, unread badges, sidebar status/snippets.
 - Memory (`remember`/`recall`) and recent-run context.
-- Desktop notifications: macOS via `osascript` (`display notification`) for v1; Windows toast via a small optional
-  dependency or PowerShell fallback. Clicking a notification opens the agent.
+- ✅ (pulled forward) **Desktop notifications** for approvals: "<agent> requests approval" plus a one-sentence
+  summary. They're skipped when you're viewing that agent, and respect the agent's toggle. macOS uses `osascript`,
+  Windows a PowerShell toast (untested on Windows yet).
+  - ⬜ Run-report notifications.
+  - ⬜ Clicking a notification opens the agent. This needs the packaged app's own notification identity
+    (UNUserNotificationCenter on macOS, an AppUserModelID on Windows).
 - Start at login, close-to-background, single instance.
 
 **Exit:** the Purchase Order Manager example runs hourly on its own and notifies the user about deliveries and supplier

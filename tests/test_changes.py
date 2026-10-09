@@ -47,7 +47,7 @@ def test_new_file_saved_automatically_by_default(mgr):
     change = propose(m, tmp, target, "hello")
     assert change["status"] == "applied" and change["kind"] == "create" and not change["can_undo"]
     assert target.read_text() == "hello"
-    assert events.items[-1]["type"] == "change.updated"
+    assert [e["type"] for e in events.items[-2:]] == ["change.updated", "attention.updated"]
 
 
 def test_existing_file_waits_then_apply_and_undo(mgr):
@@ -98,3 +98,40 @@ def test_for_messages_and_prune(mgr):
     m.apply(c["id"])
     assert [x["id"] for x in m.for_messages([1])[1]] == [c["id"]]
     assert m.prune_history(days=0) >= 0  # nothing older than "now" yet, and it must not raise
+
+
+def test_attention_lists_agents_awaiting_approval(mgr):
+    m, events, tmp = mgr
+    a = tmp / "a.txt"
+    a.write_text("1")
+    first = m.propose(
+        agent_id="po",
+        message_id=1,
+        tool_call_id=None,
+        target=a,
+        source=staged(tmp, "a.txt", "2"),
+        summary={"description": "x"},
+        policy=FileChanges(),
+    )
+    m.propose(
+        agent_id="po",
+        message_id=1,
+        tool_call_id=None,
+        target=tmp / "b.txt",
+        source=staged(tmp, "b.txt", "new"),
+        summary={},
+        policy=FileChanges(new_files="ask"),
+    )
+    entries = m.attention()
+    assert [e["agent_id"] for e in entries] == ["po"] and len(entries[0]["changes"]) == 2
+    assert events.items[-1]["type"] == "attention.updated" and events.items[-1]["attention"] == entries
+
+    # Discarding with feedback: the agent stays listed ("revising") until its reply finishes.
+    m.discard(first["id"])
+    m.set_revising("po", True)
+    assert m.attention()[0]["revising"] is True
+    for c in m.attention()[0]["changes"]:
+        m.apply(c["id"])
+    assert [e["revising"] for e in m.attention()] == [True]
+    m.set_revising("po", False)
+    assert m.attention() == []

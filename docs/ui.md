@@ -14,7 +14,8 @@ ui/
   js/state.js             signals + actions (agents, messages, dialogs, toasts, theme)
   js/app.js               layout + dialogs + keyboard shortcuts
   js/sandbox.js           main-thread side of the Pyodide sandbox: owns the Web Worker, validates its messages
-  js/views/               Sidebar, Channel (header/timeline/composer), AgentEditor, SettingsDialog, Welcome
+  js/views/               Sidebar, Channel (header/timeline/composer), Activity (things waiting on you),
+                          AgentEditor, SettingsDialog, Welcome
   js/components/          common.js (Icon, Avatar, Modal, Field, Switch…), AvatarPicker.js,
                           Activity.js (activity steps, change cards, the Discard feedback box),
                           ContextMenu.js (right-click menus)
@@ -61,6 +62,11 @@ the editor's `errors` and jumps to the first tab with an error. Closing with uns
 - **Context menus:** call `openContextMenu(event, {title, items})` from state.js. `<ContextMenu>` in `app.js` renders
   one menu at a time, keeps it on screen, supports arrow keys and Escape, and closes on outside click, scroll, or
   resize. Right-clicking an agent offers **Edit agent** and **Duplicate**.
+- **Activity:** the `attention` signal (from `bootstrap` and `attention.updated`) drives the Activity tab (one entry per
+  agent, with its change cards) and the red count badge on the Activity nav item (hidden at 0). "Open conversation"
+  calls `openChange()`, which opens the agent and scrolls to and flashes the card.
+- **Focus reporting:** `state.js` calls `set_ui_state(focused, viewing)` on window focus/blur/visibility changes and
+  when the open conversation changes, so Python can skip desktop notifications you'd see anyway.
 - **Keyboard shortcuts:** Ctrl/⌘ N new agent · Ctrl/⌘ , settings · Ctrl/⌘ B collapse sidebar.
 
 ## Theming

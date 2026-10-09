@@ -1,4 +1,4 @@
-// Welcome screen (no agents yet), the New Agent dialog (pick a template), and the Activity placeholder.
+// Welcome screen (no agents yet) and the New Agent dialog (pick a template).
 
 import { html } from "htm/preact";
 import { Avatar, Icon, Logo, Modal } from "../components/common.js";
@@ -59,23 +59,5 @@ export function NewAgentDialog() {
         <${TemplateGrid} />
       </div>
     <//>
-  `;
-}
-
-export function Activity() {
-  return html`
-    <section class="main">
-      <header class="channel-header">
-        <${Icon} name="inbox" size="lg" />
-        <div class="who"><div class="name">Activity</div><div class="sub">Updates from all your agents</div></div>
-      </header>
-      <div class="placeholder">
-        <div>
-          <${Icon} name="inbox" />
-          <div><strong>Nothing here yet</strong></div>
-          <div>When agents run on a schedule, their findings and notifications will collect here.</div>
-        </div>
-      </div>
-    </section>
   `;
 }

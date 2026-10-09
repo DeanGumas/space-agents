@@ -43,6 +43,7 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 | `agent.status` | `agent_id, status` (`idle`/`responding`) | Status dot, "Responding" chip, Stop button |
 | `tool.started` / `tool.done` | `agent_id, message_id, call` | Activity step (spinner → done/failed) |
 | `change.updated` | `agent_id, message_id, change` | Proposed-change card (pending/applied/…) |
+| `attention.updated` | `attention` (full list) | Activity entries and the sidebar's Activity badge |
 
 ## Request flow: sending a chat message
 
@@ -74,6 +75,21 @@ Files an agent produces become *proposed changes* (`changes.py`; details in
 The agent learns outcomes when its history is built: earlier replies are annotated with what happened to their
 changes.
 
+## Approvals: Activity and desktop notifications
+
+- **The attention list** (`ChangeManager.attention()`) has one entry per agent that's waiting on the user: it has
+  `pending`/`conflicted` changes, or it's *revising* after "Discard & tell agent". It's sent in `bootstrap` and pushed
+  as `attention.updated` whenever a change's status or an agent's revising state changes.
+- **The Activity tab** renders one entry per agent with its change cards (Apply/Discard work right there). The
+  sidebar badge shows the number of entries and is hidden at 0.
+- **Desktop notification:** when a reply finishes (`Api._start_reply` → `finished`), if it left pending changes the
+  bridge calls `Notifier.notify("<agent> requests approval", approval_summary(changes))`. It's skipped when the window
+  is focused on that agent's conversation (reported by the UI via `set_ui_state`), or when the agent's
+  `notifications.desktop` is off.
+- **Delivery** (`platform/notify.py`): `osascript` on macOS, a PowerShell toast on Windows, `notify-send` on Linux. Text
+  is passed as arguments/environment variables (no injection). Until the app is packaged, macOS lists these under
+  "Script Editor" and Windows under "Windows PowerShell".
+
 ## Bridge endpoints
 
 | Area | Methods |
@@ -81,6 +97,7 @@ changes.
 | Lifecycle | `ping`, `ui_ready`, `bootstrap` |
 | Agents | `list_agents`, `save_agent`, `duplicate_agent`, `delete_agent` |
 | Chat | `list_messages` (with tool calls and changes), `send_message`, `stop_agent` |
+| Activity | `attention` (also in `bootstrap`), `set_ui_state(focused, viewing)` (window focus + open conversation, for notifications) |
 | Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
 | Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
 | Files & settings | `pick_folder`, `set_theme`, `set_ui_pref` (allow-listed keys, e.g. `sidebar_width`), `save_endpoint_overrides`, `open_data_folder` |
@@ -108,6 +125,7 @@ space_agents/
   sandbox/       pyodide.py (host side), selftest.py (--sandbox-selftest)
   changes.py     proposed changes, apply/discard/undo, file history
   platform/appearance.py     OS dark-mode detection, open folder in Finder/Explorer
+  platform/notify.py         desktop notifications (osascript / PowerShell toast / notify-send)
 ui/              front end (see ui.md)
 templates/agents/            starter agent manifests
 dev/catalog.json             offline stand-in for GET /mcp

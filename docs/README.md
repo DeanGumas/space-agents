@@ -20,6 +20,8 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - local document reading/search
   - the Pyodide sandbox
   - proposed changes with Apply / Undo, and Discard with feedback that the agent acts on
+  - the Activity tab and desktop notifications for anything awaiting approval
+  - a resizable sidebar and a right-click menu (Edit, Duplicate)
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
 - **Not yet built:**

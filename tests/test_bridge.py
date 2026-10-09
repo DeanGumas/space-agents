@@ -16,6 +16,16 @@ from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.settings import UserSettings
 from space_agents.store import PNG_MAGIC, Store
 
+
+class FakeNotifier:
+    def __init__(self):
+        self.sent = []
+
+    def notify(self, title, body):
+        self.sent.append((title, body))
+        return True
+
+
 PNG_URL = "data:image/png;base64," + base64.b64encode(PNG_MAGIC + b"\x00" * 32).decode()
 
 
@@ -35,6 +45,7 @@ def env(tmp_path):
     sandbox = PyodideSandbox(tmp_path / "workspaces")
     docs = DocumentLibrary(store)
     changes = ChangeManager(store, tmp_path, events)
+    notifier = FakeNotifier()
     api = Api(
         config=config,
         reload_config=reload_config,
@@ -45,7 +56,9 @@ def env(tmp_path):
         sandbox=sandbox,
         runner=AgentRunner(store=store, events=events, docs=docs, sandbox=sandbox, changes=changes, config=config),
         changes=changes,
+        notifier=notifier,
     )
+    api._fake_notifier = notifier
     yield api, delivered
     core.stop()
     store.close()
@@ -237,3 +250,78 @@ def test_ui_prefs_are_validated_and_persisted(env, tmp_path):
     assert api.set_ui_pref("sidebar_width", "wide")["ok"] is False
     assert UserSettings(tmp_path).ui == {"sidebar_width": 480}
     assert ok(api.bootstrap())["ui"] == {"sidebar_width": 480}
+
+
+def test_approval_summary_sentence():
+    from space_agents.bridge import approval_summary
+
+    one = [{"name": "PO Tracker.xlsx", "kind": "modify", "summary": {"description": "Mark 3 Acme POs late."}}]
+    assert approval_summary(one) == "Update PO Tracker.xlsx: mark 3 Acme POs late."
+    named = [{"name": "PO Tracker.xlsx", "kind": "modify", "summary": {"description": "Update PO Tracker.xlsx dates"}}]
+    assert approval_summary(named) == "Update PO Tracker.xlsx dates."
+    many = one + [{"name": "b.csv", "kind": "create", "summary": {}}] * 2
+    assert approval_summary(many).endswith("(+2 more files).")
+    assert approval_summary([{"name": "r.csv", "kind": "create", "summary": {}}]) == "Create r.csv."
+
+
+def _reply_with_pending_change(api, tmp_path, agent_id):
+    """Simulate a finished agent reply that proposed a change to an existing file."""
+    from space_agents.manifest import FileChanges
+
+    reply = api._store.add_message(agent_id, "agent", "Proposed.")
+    target = tmp_path / "t.csv"
+    target.write_text("v1")
+    staged = tmp_path / "s.csv"
+    staged.write_text("v2")
+    api._changes.propose(
+        agent_id=agent_id,
+        message_id=reply["id"],
+        tool_call_id=None,
+        target=target,
+        source=staged,
+        summary={"description": "Mark PO 45821 late"},
+        policy=FileChanges(),
+    )
+    return reply
+
+
+def test_notifies_when_a_reply_needs_approval(env, tmp_path):
+    api, _ = env
+    agent = api._store.get_agent(ok(api.save_agent({"name": "PO Agent"}))["id"])
+    reply = _reply_with_pending_change(api, tmp_path, agent.id)
+
+    ok(api.set_ui_state(True, agent.id))  # looking right at it: no pop-up
+    api._notify_if_awaiting_approval(agent, reply["id"])
+    assert api._fake_notifier.sent == []
+
+    ok(api.set_ui_state(False, agent.id))  # window in the background
+    api._notify_if_awaiting_approval(agent, reply["id"])
+    assert api._fake_notifier.sent == [("PO Agent requests approval", "Update t.csv: mark PO 45821 late.")]
+
+    agent.notifications.desktop = False  # agent's notifications turned off
+    api._notify_if_awaiting_approval(agent, reply["id"])
+    assert len(api._fake_notifier.sent) == 1
+    assert ok(api.bootstrap())["attention"][0]["agent_id"] == agent.id
+
+
+def test_no_notification_without_pending_changes(env):
+    api, _ = env
+    agent = api._store.get_agent(ok(api.save_agent({"name": "Quiet"}))["id"])
+    reply = api._store.add_message(agent.id, "agent", "Just an answer.")
+    ok(api.set_ui_state(False, None))
+    api._notify_if_awaiting_approval(agent, reply["id"])
+    assert api._fake_notifier.sent == []
+
+
+def test_discard_feedback_keeps_agent_in_activity_until_reply_finishes(env, tmp_path):
+    api, delivered = env
+    ok(api.save_agent({"name": "Editor"}))
+    change = _pending_change(api, tmp_path, "editor")
+    ok(api.discard_change(change["id"], "Use Late instead."))
+    assert [e["revising"] for e in api._changes.attention()] == [True]
+    deadline = time.time() + 15
+    while time.time() < deadline and "editor" in api._busy:
+        time.sleep(0.05)
+    time.sleep(0.1)
+    assert api._changes.attention() == []
+    assert any(e["type"] == "attention.updated" for e in delivered)
