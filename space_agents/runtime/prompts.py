@@ -22,6 +22,7 @@ Current date and time: {now.strftime("%A, %B %d, %Y %H:%M %Z")}
 ## What you can access
 Folders on the user's computer:
 {access.describe()}
+File types you can save: {", ".join(sorted(access.file_types))}
 
 ## Tools
 - list_files: find files in your folders.

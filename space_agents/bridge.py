@@ -7,6 +7,10 @@ Conventions
   `fields` maps dotted manifest paths to messages so forms can highlight the right input. ui/js/api.js unwraps it.
 - Only public methods are exposed. Keep all state in underscore-prefixed attributes: pywebview also walks public
   attributes and would expose their methods too.
+- Don't trust the page with permissions. It renders untrusted model output and hosts the sandbox's Web Worker, so
+  assume it can be taken over. Anything that widens what an agent can reach or where the API key goes needs the user
+  to act in native UI the page can't script: a new folder must come from the native folder picker, and write access
+  or a new server address needs OK in a native confirmation dialog (`_confirm`).
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +39,9 @@ from space_agents.platform.notify import Notifier
 from space_agents.runtime.dummy import dummy_reply
 from space_agents.runtime.loop import AgentRunner
 from space_agents.sandbox.pyodide import PyodideSandbox, warm_packages
-from space_agents.settings import UserSettings
+from space_agents.settings import UserSettings, clean_overrides
 from space_agents.store import NotFound, Store
+from space_agents.tools.access import write_protected
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +105,32 @@ def to_display_path(path: str) -> str:
         return str(p)
 
 
+def folder_key(path: str) -> Path:
+    """A folder as the access policy sees it (expanded and resolved), for comparing grants."""
+    return Path(os.path.expanduser(path)).resolve()
+
+
+def new_permissions(old: Manifest | None, new: Manifest) -> list[str]:
+    """Write access `new` gives that `old` didn't, in plain words. Each needs the user's OK in a native dialog."""
+    before = {folder_key(g.path): g.access for g in old.filesystem} if old else {}
+    added = [
+        f"save files in {g.path}"
+        for g in new.filesystem
+        if g.access == "read_write" and before.get(folder_key(g.path)) != "read_write"
+    ]
+
+    def unasked_writes(m: Manifest | None) -> bool:
+        writable = m is not None and any(g.access == "read_write" for g in m.filesystem)
+        return writable and m.file_changes.existing_files == "allow_with_backup"
+
+    if unasked_writes(new) and not unasked_writes(old):
+        added.append("change existing files without asking you first (a backup is kept)")
+    return added
+
+
+ENDPOINT_LABELS = {"llm_base_url": "AI model server", "mcp_base_url": "Data sources server"}
+
+
 class Api:
     def __init__(
         self,
@@ -114,6 +146,7 @@ class Api:
         changes: ChangeManager,
         notifier: Notifier | None = None,
         on_ui_ready: Callable[[dict[str, Any]], None] | None = None,
+        confirm: Callable[[str, str], bool] | None = None,
     ) -> None:
         self._config = config
         self._reload_config = reload_config
@@ -126,6 +159,11 @@ class Api:
         self._changes = changes
         self._notifier = notifier or Notifier()
         self._on_ui_ready = on_ui_ready
+        self._confirm_dialog = confirm  # tests inject one; otherwise the window's native dialog
+        self._picked_folders: set[Path] = set()  # chosen in the native folder picker this session
+        self._template_folders = {
+            folder_key(g["path"]) for t in load_templates(paths.templates_dir()) for g in t["manifest"]["filesystem"]
+        }
         self._ui_focused = True  # reported by the UI (window focus/visibility)
         self._ui_viewing: str | None = None  # agent whose channel is open
         self._window: webview.Window | None = None
@@ -134,6 +172,13 @@ class Api:
 
     def _attach_window(self, window: webview.Window) -> None:
         self._window = window
+
+    def _confirm(self, title: str, message: str) -> bool:
+        """Ask in a native dialog, which the page can't script or click. No window (headless) means no."""
+        if self._confirm_dialog is not None:
+            return bool(self._confirm_dialog(title, message))
+        window = self._window
+        return bool(window and window.create_confirmation_dialog(title, message))
 
     # --- lifecycle ----------------------------------------------------------------------------------------------
 
@@ -218,13 +263,42 @@ class Api:
         payload["avatar"] = avatar
 
         manifest = Manifest.from_dict(payload)
-        if manifest.id:
-            existing = self._store.get_agent(manifest.id)
-            if keep_image:
-                manifest.avatar.image = existing.avatar.image
+        existing = self._store.get_agent(manifest.id) if manifest.id else None
+        if existing and keep_image:
+            manifest.avatar.image = existing.avatar.image
+        self._check_folders(existing, manifest)
+        added = new_permissions(existing, manifest)
+        if added:
+            message = f'Allow "{manifest.name}" to:\n' + "\n".join(f"• {a}" for a in added)
+            if not self._confirm("Allow more access?", message):
+                raise UserError("Not saved: the new access wasn't allowed.")
         png = Store.decode_png_data_url(image_data) if image_data else None
         saved = self._store.save_agent(manifest, png)
         return self._agent_view(saved, self._store.last_messages().get(saved.id))
+
+    def _check_folders(self, old: Manifest | None, new: Manifest) -> None:
+        """A folder the agent didn't have before must come from the native folder picker (or a built-in template).
+        Otherwise a compromised page could grant an agent any folder just by sending its path.
+
+        Read & write is refused on system, app-settings, and hidden folders: files there can run code by themselves.
+        (FolderAccess blocks writes there anyway; this tells the user up front.)
+        """
+        known = (
+            self._picked_folders
+            | self._template_folders
+            | {folder_key(g.path) for g in (old.filesystem if old else [])}
+        )
+        errors = {}
+        for i, g in enumerate(new.filesystem):
+            if folder_key(g.path) not in known:
+                errors[f"filesystem.{i}.path"] = "Add this folder with the Add folder… button."
+            elif g.access == "read_write" and write_protected(folder_key(g.path)):
+                errors[f"filesystem.{i}.path"] = (
+                    "This is a system, app-settings, or hidden folder, so agents can't save files here. "
+                    "Choose Read only, or pick a regular folder."
+                )
+        if errors:
+            raise ManifestError(errors)
 
     @endpoint
     def duplicate_agent(self, agent_id: str) -> dict[str, Any]:
@@ -395,6 +469,7 @@ class Api:
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if not result:
             return None
+        self._picked_folders.add(folder_key(result[0]))
         return {"path": to_display_path(result[0])}
 
     # --- settings -----------------------------------------------------------------------------------------------
@@ -411,7 +486,20 @@ class Api:
 
     @endpoint
     def save_endpoint_overrides(self, overrides: dict[str, str]) -> list[dict[str, Any]]:
-        self._settings.set_overrides(overrides or {})
+        """Change the server URLs. A new address needs OK in a native dialog, because the API key will go there."""
+        if not isinstance(overrides, dict):
+            raise UserError("Invalid settings.")
+        cleaned = clean_overrides(overrides)
+        moved = {k: v for k, v in cleaned.items() if v != self._config.get(k)}
+        if moved:
+            lines = "\n".join(f"• {ENDPOINT_LABELS[k]}: {v}" for k, v in moved.items())
+            message = (
+                f"Send your API key and agent data to a new address?\n{lines}\n\n"
+                "Only continue if your IT team gave you this address."
+            )
+            if not self._confirm("Change server address?", message):
+                raise UserError("Not saved: the server address wasn't changed.")
+        self._settings.set_overrides(cleaned)
         self._config = self._reload_config()
         self._runner.config = self._config
         return self._config.describe()

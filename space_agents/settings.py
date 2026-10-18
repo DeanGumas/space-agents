@@ -81,7 +81,14 @@ class UserSettings:
         self.save()
 
     def set_overrides(self, overrides: dict[str, str]) -> None:
-        self.overrides = {
-            k: v.strip().rstrip("/") for k, v in overrides.items() if k in USER_OVERRIDABLE and v and v.strip()
-        }
+        self.overrides = clean_overrides(overrides)
         self.save()
+
+
+def clean_overrides(overrides: dict[str, Any]) -> dict[str, str]:
+    """Endpoint overrides as they're stored: known keys only, trimmed, no trailing slash, empty values dropped."""
+    return {
+        k: v.strip().rstrip("/")
+        for k, v in overrides.items()
+        if k in USER_OVERRIDABLE and isinstance(v, str) and v.strip()
+    }

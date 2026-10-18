@@ -199,13 +199,14 @@ class ToolBox:
         sandbox: PyodideSandbox,
         changes: ChangeManager,
         protected: list[Path],
+        extra_file_types: list[str] = (),
     ):
         self.agent = agent
         self.message_id = message_id
         self.docs = docs
         self.sandbox = sandbox
         self.changes = changes
-        self.access = FolderAccess(agent.filesystem, protected)
+        self.access = FolderAccess(agent.filesystem, protected, extra_file_types)
 
     def specs(self) -> list[dict[str, Any]]:
         return TOOL_SPECS
@@ -381,6 +382,7 @@ class ToolBox:
                         raise AccessDenied("Specify output_folder (a read & write folder) for new files.")
                     base = writable[0].path
                 target = self.access.resolve(str(base / out.name), write=True)
+            self.access.check_file_type(target)
         except AccessDenied as e:
             return f"{out.name}: not saved. {e}"
         details = await self._summarize(out, target)

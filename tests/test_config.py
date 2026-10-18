@@ -94,3 +94,12 @@ def test_sandbox_warmup_modes(tmp_path):
     assert warm_packages("light") == ["openpyxl"]
     assert warm_packages("off") is None and warm_packages("0") is None and warm_packages("false") is None
     assert warm_packages("1") == ["openpyxl", "pandas"] and warm_packages("bogus") == ["openpyxl", "pandas"]
+
+
+def test_file_safety_settings(tmp_path):
+    cfg = load_config(environ={}, dotenv_path=False, cli={"data_dir": tmp_path})
+    assert cfg.extra_file_types == [] and cfg.mark_agent_files is True
+    env = {"SPACE_AGENTS_EXTRA_FILE_TYPES": ".py, .cpp", "SPACE_AGENTS_MARK_AGENT_FILES": "0"}
+    cfg = load_config(environ=env, dotenv_path=False, cli={"data_dir": tmp_path})
+    assert cfg.extra_file_types == [".py", ".cpp"] and cfg.mark_agent_files is False
+    assert {"extra_file_types", "mark_agent_files"}.isdisjoint(c["key"] for c in cfg.describe() if c["editable"])

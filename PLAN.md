@@ -690,6 +690,13 @@ tickets) plus **ordinary model mistakes**, not a malicious local user.
      and the app's own data directory.
    - Agents never write user files directly. Writes go through proposed changes (§2.10), only into `read_write`
      roots, with size limits, no deletes, conflict checks, and a restorable version for every overwrite.
+   - ✅ **Writes have stricter rules,** because a file in the wrong place runs code without anyone opening it:
+     - **Never in sensitive folders:** system folders, `~/Library` (cloud drives excepted), `AppData`, or hidden
+       folders, even inside a read & write grant. This blocks LaunchAgents, the Startup folder, and shell configs.
+     - **Allowed file types only:** documents, data, and images by default. Admins can add more with
+       `extra_file_types`, but program launchers (`.exe`, `.bat`, `.lnk`, …) are never allowed.
+     - **Marked as downloaded:** written files get Mark of the Web / quarantine, so Office opens them in Protected
+       View.
    - Files the user attaches in chat are readable by that agent as snapshots, even outside granted folders. Attaching
      is an explicit, per-file grant.
 2. **Server tool policy (MCP and OpenAPI).**
@@ -713,6 +720,13 @@ tickets) plus **ordinary model mistakes**, not a malicious local user.
    can't hang or crash the app. Today extraction runs on a dedicated in-process thread.
 5. **UI hardening.** All model output is sanitized with DOMPurify and the page has a strict CSP. Links open in the
    system browser, never inside the app webview.
+   - ✅ **The bridge doesn't trust the page with permissions.** The sandbox worker shares the page's renderer
+     process, so one browser-engine bug could hand the page to an attacker without breaking the OS sandbox. So:
+     - new folder grants must come from the native folder picker
+     - write access, auto-applying changes, and new server addresses need OK in a native dialog
+
+     Details: `docs/architecture.md`.
+   - **Planned:** run the sandbox in a separate renderer process with no bridge at all.
 6. **Secrets.** The API key is the user's identity across the models, every server, and (via OBO) their mailbox and
    files, so it's treated like a password:
    - It lives only in the OS keychain.

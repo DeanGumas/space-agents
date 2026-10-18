@@ -15,6 +15,13 @@ Each setting is resolved from these layers. Higher layers win.
 Planned (Phase 1): a **remote config** layer between `default` and `user`, fetched from the service on launch, so
 URLs can move without reinstalling (PLAN.md §2.5).
 
+Only the endpoint URLs can be changed from the app's UI. Security settings such as `extra_file_types` and
+`mark_agent_files` come only from `defaults.json`, `.env`, the environment, or the CLI, so a compromised page can't
+loosen them.
+
+Saving a new server address in Settings asks for OK in a native dialog first, because the API key will be sent
+there. A compromised page can't change where the key goes on its own (architecture.md).
+
 Settings → Data shows every value and the layer it came from. Endpoint fields are editable in Settings only when the
 current value comes from `default` or `user`; a value from `.env`/env/CLI would override the edit anyway.
 
@@ -30,6 +37,8 @@ current value comes from `default` or `user`; a value from `.env`/env/CLI would 
 | `models` | `SPACE_AGENTS_MODELS` | list | Models offered in the editor; the first is the default for agents without one |
 | `api_key` | `SPACE_AGENTS_API_KEY` | secret | **Dev/test only.** Never shown in the UI (Settings shows "set"); moves to the OS keychain |
 | `reasoning_effort` | `SPACE_AGENTS_REASONING_EFFORT` | str | Default `low`; bounds reasoning tokens; dropped if a model rejects it |
+| `extra_file_types` | `SPACE_AGENTS_EXTRA_FILE_TYPES` | list | File types agents may save on top of the safe defaults, e.g. `.py,.cpp`. Program launchers are never allowed (see documents-and-sandbox.md) |
+| `mark_agent_files` | `SPACE_AGENTS_MARK_AGENT_FILES` | bool | Default on: tag files agents save as downloaded from the internet (Protected View in Office) |
 | `sandbox_warmup` | `SPACE_AGENTS_SANDBOX_WARMUP` | str | `full` (default) / `light` / `off`: preload the Python sandbox at launch (see documents-and-sandbox.md) |
 
 Behavior details:

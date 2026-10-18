@@ -51,6 +51,18 @@ SPECS: tuple[Spec, ...] = (
         "Preload the Python sandbox at launch: full (~420 MB, first run <1 s), light (~210 MB), or off",
     ),
     Spec(
+        "extra_file_types",
+        "list",
+        "Extra file types",
+        "Comma-separated file types agents may also save, e.g. .py,.cpp. Program launchers (.exe, .bat…) never are",
+    ),
+    Spec(
+        "mark_agent_files",
+        "bool",
+        "Mark agent files",
+        "Tag files agents save as downloaded from the internet: Office opens them in Protected View, blocks macros",
+    ),
+    Spec(
         "reasoning_effort",
         "str",
         "Reasoning effort",
@@ -167,6 +179,14 @@ class Config:
     def models(self) -> list[str]:
         return self.get("models")
 
+    @property
+    def extra_file_types(self) -> list[str]:
+        return self.get("extra_file_types")
+
+    @property
+    def mark_agent_files(self) -> bool:
+        return self.get("mark_agent_files")
+
     def describe(self) -> list[dict[str, Any]]:
         """For the Settings UI: every value with its label, source, and whether the user may edit it."""
         out = []
@@ -208,6 +228,8 @@ def load_config(
     defaults.setdefault("api_key", "")
     defaults.setdefault("reasoning_effort", "low")
     defaults.setdefault("sandbox_warmup", "full")
+    defaults.setdefault("extra_file_types", [])
+    defaults.setdefault("mark_agent_files", True)
 
     if dotenv_path is True:
         dotenv_path = find_dotenv()

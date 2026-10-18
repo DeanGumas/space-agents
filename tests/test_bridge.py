@@ -26,6 +26,22 @@ class FakeNotifier:
         return True
 
 
+class FakeWindow:
+    """Stands in for the native window: the folder picker and confirmation dialogs the page can't script."""
+
+    def __init__(self):
+        self.next_folder: str | None = None
+        self.answer = True
+        self.asked: list[tuple[str, str]] = []
+
+    def create_file_dialog(self, dialog_type):
+        return [self.next_folder] if self.next_folder else None
+
+    def create_confirmation_dialog(self, title, message):
+        self.asked.append((title, message))
+        return self.answer
+
+
 PNG_URL = "data:image/png;base64," + base64.b64encode(PNG_MAGIC + b"\x00" * 32).decode()
 
 
@@ -59,6 +75,8 @@ def env(tmp_path):
         notifier=notifier,
     )
     api._fake_notifier = notifier
+    api._fake_window = FakeWindow()
+    api._attach_window(api._fake_window)
     yield api, delivered
     core.stop()
     store.close()
@@ -157,6 +175,78 @@ def test_theme_and_overrides(env):
     assert described["llm_base_url"]["source"] == "user"
 
 
+def test_new_server_address_needs_native_confirmation(env):
+    api, _ = env
+    window = api._fake_window
+    window.answer = False
+    res = api.save_endpoint_overrides({"llm_base_url": "https://evil.example/api"})
+    assert res["ok"] is False and "wasn't changed" in res["error"]
+    assert api._config.llm_base_url != "https://evil.example/api"
+    assert "https://evil.example/api" in window.asked[-1][1]
+
+    window.answer = True
+    ok(api.save_endpoint_overrides({"llm_base_url": "https://new.example/api"}))
+    assert api._config.llm_base_url == "https://new.example/api"
+
+    window.asked.clear()
+    ok(api.save_endpoint_overrides({"llm_base_url": "https://new.example/api/"}))  # unchanged: no dialog
+    ok(api.save_endpoint_overrides({}))  # back to the build default: no dialog
+    assert window.asked == []
+    assert api.save_endpoint_overrides("nope")["ok"] is False
+
+
+def test_new_folders_must_come_from_the_native_picker(env, tmp_path):
+    api, _ = env
+    folder = tmp_path / "Reports"
+    folder.mkdir()
+    grant = [{"path": str(folder), "access": "read"}]
+    res = api.save_agent({"name": "Sneaky", "filesystem": grant})
+    assert res["ok"] is False and set(res["fields"]) == {"filesystem.0.path"}
+
+    api._fake_window.next_folder = str(folder)
+    assert ok(api.pick_folder())["path"]
+    agent = ok(api.save_agent({"name": "Picked", "filesystem": grant}))
+    # Folders the agent already has, and folders from built-in templates, need no picking.
+    api._picked_folders.clear()
+    ok(api.save_agent({**agent, "description": "edited"}))
+    ok(api.save_agent({"name": "From template", "filesystem": [{"path": "~/Downloads", "access": "read"}]}))
+    assert api._fake_window.asked == []  # read-only access never asks
+
+
+def test_write_access_needs_native_confirmation(env, tmp_path):
+    api, _ = env
+    window = api._fake_window
+    folder = tmp_path / "Reports"
+    folder.mkdir()
+    window.next_folder = str(folder)
+    ok(api.pick_folder())
+    writable = [{"path": str(folder), "access": "read_write"}]
+
+    window.answer = False
+    res = api.save_agent({"name": "Writer", "filesystem": writable})
+    assert res["ok"] is False and "wasn't allowed" in res["error"]
+    assert ok(api.list_agents()) == []
+    assert window.asked == [("Allow more access?", f'Allow "Writer" to:\n• save files in {folder}')]
+
+    window.answer = True
+    agent = ok(api.save_agent({"name": "Reader", "filesystem": [{"path": str(folder), "access": "read"}]}))
+    window.asked.clear()
+    agent = ok(api.save_agent({**agent, "filesystem": writable}))  # upgrading read → read & write asks
+    assert len(window.asked) == 1
+    ok(api.save_agent({**agent, "description": "edited"}))  # nothing new: no dialog
+    assert len(window.asked) == 1
+
+    window.answer = False
+    res = api.save_agent({**agent, "file_changes": {"new_files": "allow", "existing_files": "allow_with_backup"}})
+    assert res["ok"] is False and "without asking" in window.asked[-1][1]
+
+
+def test_without_a_window_nothing_is_confirmed(env):
+    api, _ = env
+    api._window = None
+    assert api._confirm("Allow?", "Allow it?") is False
+
+
 def test_to_display_path(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -218,6 +308,7 @@ def test_clone_names():
 
 def test_duplicate_agent_copies_setup_not_history(env):
     api, _ = env
+    api._fake_window.answer = True  # granting ~/Documents read & write asks in a native dialog
     src = ok(
         api.save_agent(
             {
@@ -325,3 +416,17 @@ def test_discard_feedback_keeps_agent_in_activity_until_reply_finishes(env, tmp_
     time.sleep(0.1)
     assert api._changes.attention() == []
     assert any(e["type"] == "attention.updated" for e in delivered)
+
+
+def test_sensitive_folders_cannot_be_read_and_write(env, tmp_path, monkeypatch):
+    api, _ = env
+    home = tmp_path.resolve() / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    api._fake_window.next_folder = str(home / "Library" / "LaunchAgents")
+    path = ok(api.pick_folder())["path"]
+    res = api.save_agent({"name": "Sneaky", "filesystem": [{"path": path, "access": "read_write"}]})
+    assert res["ok"] is False and "can't save files here" in res["fields"]["filesystem.0.path"]
+    assert api._fake_window.asked == []  # refused before asking
+    ok(api.save_agent({"name": "Reader", "filesystem": [{"path": path, "access": "read"}]}))

@@ -22,6 +22,7 @@ from typing import Any
 from space_agents.core import EventBus
 from space_agents.documents.library import file_sha256
 from space_agents.manifest import FileChanges
+from space_agents.platform.marking import mark_as_downloaded
 from space_agents.store import NotFound, Store, now_iso
 from space_agents.tools.access import display_path
 
@@ -35,9 +36,10 @@ class ChangeError(ValueError):
 
 
 class ChangeManager:
-    def __init__(self, store: Store, data_dir: Path, events: EventBus):
+    def __init__(self, store: Store, data_dir: Path, events: EventBus, mark_files: bool = True):
         self._store = store
         self._events = events
+        self._mark_files = mark_files  # tag applied files as downloaded (setting `mark_agent_files`)
         self.staging_dir = data_dir / "staging"
         self.history_dir = data_dir / "history"
         self.staging_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +166,8 @@ class ChangeManager:
         version_id = self._snapshot(target, change_id) if target.exists() else None
         target.parent.mkdir(parents=True, exist_ok=True)
         self._atomic_copy(staged, target)
+        if self._mark_files:
+            mark_as_downloaded(target)
         shutil.rmtree(staged.parent, ignore_errors=True)
         self._set(change_id, status="applied", version_id=version_id)
         log.info("Applied change %s → %s", change_id, target)

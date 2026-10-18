@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import pytest
 
 from space_agents.changes import ChangeError, ChangeManager
@@ -135,3 +138,17 @@ def test_attention_lists_agents_awaiting_approval(mgr):
     assert [e["revising"] for e in m.attention()] == [True]
     m.set_revising("po", False)
     assert m.attention() == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="checks the macOS quarantine attribute")
+def test_applied_files_are_marked_as_downloaded(mgr, tmp_path):
+    m, events, tmp = mgr
+    target = tmp / "new.txt"
+    propose(m, tmp, target, "hello")
+    mark = subprocess.run(["xattr", "-p", "com.apple.quarantine", target], capture_output=True, text=True)
+    assert mark.stdout.startswith("0081;") and "Space Agents" in mark.stdout
+
+    unmarked = ChangeManager(m._store, tmp / "data", events, mark_files=False)
+    other = tmp / "other.txt"
+    propose(unmarked, tmp, other, "hello")
+    assert subprocess.run(["xattr", "-p", "com.apple.quarantine", other], capture_output=True).returncode != 0

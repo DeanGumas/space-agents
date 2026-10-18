@@ -381,7 +381,8 @@ function FilesTab({ draft, set, err }) {
     <p class="lead">Folders on this computer the agent may look through, such as Documents or Downloads.</p>
     <${Notice} icon="shield-check">
       The agent can only see inside these folders. Sensitive locations (like <code>.ssh</code> and password stores)
-      are always blocked. <strong>Read & write</strong> lets it save files there, but it can never delete files.
+      are always blocked. <strong>Read & write</strong> lets it save documents there, but it can never delete files,
+      create programs, or save into system or hidden folders.
     <//>
     ${folders.length === 0
       ? html`<div class="empty-box">No folders yet.</div>`

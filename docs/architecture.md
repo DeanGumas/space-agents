@@ -102,6 +102,24 @@ changes.
 | Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
 | Files & settings | `pick_folder`, `set_theme`, `set_ui_pref` (allow-listed keys, e.g. `sidebar_width`), `save_endpoint_overrides`, `open_data_folder` |
 
+## The page is not trusted with permissions
+
+The webview renders untrusted model output and hosts the sandbox's Web Worker in the same renderer process as the
+page. So the bridge assumes a compromised page is possible (say, via a browser-engine bug triggered by injected code)
+and makes sure such a page can't widen an agent's reach or redirect the API key on its own. Those actions need the
+user to act in native UI, which the page can't script:
+
+| Action | Requires |
+|---|---|
+| Granting an agent a folder it didn't have | The folder was chosen in the native picker this session (`pick_folder`), or comes from a built-in template. Otherwise `save_agent` rejects it as a field error |
+| Read & write on a folder (new, or upgraded from read only) | OK in a native confirmation dialog on save |
+| "Existing files: apply without asking" (`allow_with_backup`) on an agent with a writable folder | Same dialog |
+| A new server address (`save_endpoint_overrides`) | OK in a native dialog: the API key and agent data will go there. Clearing an override (back to the build default) doesn't ask |
+
+The dialogs go through `Api._confirm`. With no window (headless), the answer is always no, and tests inject a fake.
+What a compromised page *can* still do: chat with agents, apply or discard pending changes (every overwrite keeps a
+restorable version), and edit agents' instructions.
+
 ## Code map
 
 ```
@@ -126,6 +144,7 @@ space_agents/
   changes.py     proposed changes, apply/discard/undo, file history
   platform/appearance.py     OS dark-mode detection, open folder in Finder/Explorer
   platform/notify.py         desktop notifications (osascript / PowerShell toast / notify-send)
+  platform/marking.py        mark files agents write as downloaded (Mark of the Web / macOS quarantine)
 ui/              front end (see ui.md)
 templates/agents/            starter agent manifests
 dev/catalog.json             offline stand-in for GET /mcp

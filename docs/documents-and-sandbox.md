@@ -14,7 +14,17 @@ How agents read files, run code, and change files safely. Design rationale is in
 Every path goes through `FolderAccess` (`tools/access.py`):
 - **Resolution:** `realpath` + containment in a granted folder.
 - **Deny-list:** `.ssh`, keychains, `*.pem`, and the app's own data folder.
-- **Writes:** only into folders granted *read & write*.
+- **Writes:** only into folders granted *read & write*, with stricter rules, because a file in the wrong place can
+  run code without anyone opening it:
+  - **Never into sensitive locations,** even inside a read & write grant: `~/Library` (except the cloud drives in
+    `Library/CloudStorage` and `Library/Mobile Documents`), `~/Applications`, `AppData`, `ProgramData`, system folders,
+    and any hidden folder (`.config`, `.git`, …). That covers LaunchAgents, the Windows Startup folder, and shell
+    configs. The editor also refuses *Read & write* on such a folder.
+  - **Only allowed file types:** documents, data, and images (`.xlsx .docx .pptx .pdf .csv .tsv .txt .md .json .xml
+    .yaml .yml .log .png .jpg .jpeg .gif .webp`). Admins can add more with `extra_file_types` (e.g. `.py,.cpp` for a
+    coding agent). Program launchers (`.exe .bat .cmd .lnk .url .ps1 .vbs .hta .command .app .xll`, …) can never be
+    saved, whatever the setting says. Windows device names (`NUL.txt`) and names ending in a dot or space are
+    refused. The model is told the allowed types in its system prompt, and a refusal comes back as the tool result.
 
 Errors come back to the model as tool results, never crashes. The user sees a plain-language step for each call
 ("Read PO Tracker.xlsx"), and "Show details" reveals arguments, code, and results.
@@ -108,6 +118,10 @@ Statuses: `pending → applied | discarded`, `pending → conflicted → applied
 1. Re-hash the target. If it changed since the proposal, mark it `conflicted`; the user can "Apply anyway".
 2. Snapshot the current file into `data/history/<sha256>` (`file_versions` table).
 3. Write via temp file + `os.replace`.
+4. Mark the file as downloaded from the internet (`platform/marking.py`, setting `mark_agent_files`, on by default).
+   On Windows that's a `Zone.Identifier` stream: Office opens the file in Protected View and blocks macros, which
+   stops a booby-trapped Office file (remote template, external object). On macOS it's the `com.apple.quarantine`
+   attribute. The catch: Office shows "Enable Editing" the first time you open a file an agent changed.
 
 **Discard** opens a "What should be different?" box on the card:
 - **Empty:** just discards.

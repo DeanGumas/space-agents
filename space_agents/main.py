@@ -99,7 +99,7 @@ def run(argv: list[str] | None = None) -> int:
     events.start()
     sandbox = PyodideSandbox(config.data_dir / "workspaces")
     docs = DocumentLibrary(store)
-    changes = ChangeManager(store, config.data_dir, events)
+    changes = ChangeManager(store, config.data_dir, events, mark_files=config.mark_agent_files)
     changes.prune_history()
     runner = AgentRunner(store=store, events=events, docs=docs, sandbox=sandbox, changes=changes, config=config)
     if config.llm_ready:

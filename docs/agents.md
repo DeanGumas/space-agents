@@ -25,6 +25,11 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 `filesystem.1.path`). The bridge returns them as `fields`; the editor shows each under its input and puts a red dot
 on the tab that owns it.
 
+**Permissions** (see "The page is not trusted with permissions" in architecture.md): a folder an agent didn't
+already have must be added with the native folder picker (or come from a built-in template), and new write access
+asks for OK in a native dialog when the agent is saved. *Read & write* is refused on system, app-settings, and hidden
+folders (documents-and-sandbox.md).
+
 ## Storage
 
 ```

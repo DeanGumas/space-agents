@@ -103,6 +103,7 @@ class AgentRunner:
             sandbox=self._sandbox,
             changes=self._changes,
             protected=[config.data_dir],
+            extra_file_types=config.extra_file_types,
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt(agent, tools.access)},

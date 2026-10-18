@@ -309,3 +309,39 @@ async def test_history_tells_the_model_what_happened_to_its_changes(env, tmp_pat
     earlier_reply = next(m for m in history if m["role"] == "assistant" and "Proposed." in m["content"])
     assert "[File changes from this reply]" in earlier_reply["content"]
     assert "PO Tracker.xlsx: discarded by the user" in earlier_reply["content"]
+
+
+async def test_disallowed_file_types_are_not_saved(env, tmp_path):
+    *_, work = env
+    sandbox = FakeSandbox(tmp_path, {"Invoice.pdf.bat": "@echo off", "helper.py": "print()", "totals.csv": "a\n"})
+    client = ScriptedClient(
+        [
+            ChatResult(tool_calls=[call("run_python", description="Make files", code="...", output_folder=str(work))]),
+            ChatResult(content="Done."),
+        ]
+    )
+    msg = await ask(env, make_runner(env, client, sandbox), "Make the files")
+    assert [c["name"] for c in env[3].for_messages([msg["id"]])[msg["id"]]] == ["totals.csv"]
+    assert not (work / "Invoice.pdf.bat").exists() and not (work / "helper.py").exists()
+    result = client.requests[1]["messages"][-1]["content"]
+    assert "Invoice.pdf.bat: not saved. Agents can never save .bat files" in result
+    assert "helper.py: not saved. Agents can't save .py files" in result
+
+
+async def test_extra_file_types_setting_allows_more(env, tmp_path):
+    store, events, docs, changes, config, agent, work = env
+    config = load_config(
+        environ={"SPACE_AGENTS_EXTRA_FILE_TYPES": ".py"}, dotenv_path=False, cli={"data_dir": config.data_dir}
+    )
+    sandbox = FakeSandbox(tmp_path, {"helper.py": "print()"})
+    client = ScriptedClient(
+        [
+            ChatResult(
+                tool_calls=[call("run_python", description="Write a script", code="...", output_folder=str(work))]
+            ),
+            ChatResult(content="Done."),
+        ]
+    )
+    runner = make_runner((store, events, docs, changes, config, agent, work), client, sandbox)
+    await ask(env, runner, "Write a helper script")
+    assert (work / "helper.py").read_text() == "print()"
