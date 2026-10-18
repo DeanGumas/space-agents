@@ -370,6 +370,7 @@ The model sees a few clear, task-shaped tools. Users see plain-language activity
 | Documents | `list_pages(path)` (outline: headings, sheets, slides) | planned | |
 | Writing | `append_rows`, `create_document`, … | deferred | Structured writers. With the guardrails in §2.9, `run_python` handled spreadsheet edits reliably even with gpt-5-nano; revisit if needed |
 | Org servers | whatever the selected MCP/OpenAPI servers expose | planned (Phase 2a) | Read-only tools only by default (§4). Includes the GPU document server's `convert_document` |
+| Skills | `use_skill(name)` | ✅ built | Only when the agent has skills enabled (`skills.py`). Each skill is a folder with a `SKILL.md` (YAML header: `name`, `description`). Names and descriptions go in the system prompt; `use_skill` returns the instructions and the skill's file list, and the model reads those with the normal tools. Skill folders are read-only for agents. Python scripts can run in the sandbox; shell and Node scripts can't. Live-tested with gpt-5-nano, which picked the skill and followed its template |
 | Built-in | `post_report`, `remember`, `recall`, `current_time` | planned (Phase 3) | `post_report` is how a scheduled run delivers its result |
 
 - **Errors are results, not crashes.** Tool errors (access denied, unsupported file, code failure, even an unexpected
@@ -559,6 +560,9 @@ Users can give an agent files directly in chat, no folder grant needed.
 
   // Who the agent is and how it behaves (system prompt). Plain English.
   "instructions": "You help a supply chain buyer manage open purchase orders. ...",
+
+  // Optional: a folder of skills (one subfolder per skill, each with a SKILL.md). Chosen with the native picker.
+  "skills": { "enabled": true, "folder": "~/.claude/skills" },
 
   // Any model from GET {llm_base_url}/models. The API key and endpoints are app-wide, not per agent.
   "model": {
@@ -1036,8 +1040,10 @@ delays with suggested next actions.
   clicks Approve in the channel. The `permissions.external_actions` manifest field reserves this.
 - **More execution backends** behind the same `ExecutionBackend` interface: Docker/Podman for power users on
   IT-managed machines, or short-lived server-side sandboxes for heavy jobs. Same rules: copies in, proposals out.
-- **Skills:** packaged guidance the model can load, e.g. "if local extraction comes back empty or garbled, use the
-  document server's `convert_document`", or how to build a specific report format.
+- ✅ **Skills** (built; see the Skills row in §2.7): packaged guidance the model can load, e.g. "if local
+  extraction comes back empty or garbled, use the document server's `convert_document`", or how to build a specific
+  report format.
+  - **Later:** bundled org skills shipped with the app or from the server, and skills that need a shell.
 - **Smarter document routing:** automatically send scanned pages to the GPU document server and merge the results
   into the cache.
 - Responses API backend; multiple model fallbacks.

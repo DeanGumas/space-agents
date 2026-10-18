@@ -12,6 +12,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `avatar.emoji` / `avatar.color` | Emoji on a colored tile; `emoji: null` falls back to initials | General → avatar |
 | `avatar.image` | `avatars/<id>.png`, managed by the store, **never set by the UI** | General → avatar → Picture |
 | `instructions` | Standing orders (system prompt), plain English | Instructions |
+| `skills` | `enabled`, `folder`: a folder of skills the agent can use (see below) | Instructions → Skills |
 | `model.name`, `model.temperature` | Model id (empty → the first entry of the `models` setting); temperature is shown as "Creativity" and dropped automatically for models that reject it (e.g. GPT-5) | Model |
 | `mcp_servers[]` | `{id, tools: "read_only" \| [names]}`. The document server is implicit and not listed | Data sources |
 | `filesystem[]` | `{path, access: "read" \| "read_write"}`. Paths under home are stored as `~/…` | Files & folders |
@@ -90,3 +91,23 @@ The Data sources tab lists servers from the catalog. For now that's `dev/catalog
 - **Write tools** are shown locked.
 - **The `document_processing` server** (GPU scans/VLM) shows as "Always available". Everyday documents are read locally (PLAN.md §2.8).
 - **Servers an agent references that aren't in the catalog** are shown so the user can remove them.
+
+## Skills
+
+A skill is a folder with a `SKILL.md`: a YAML header with a `name` and a `description` (when to use it), then
+instructions. It can hold extra files the instructions point to (references, templates, scripts). This is the
+standard Agent Skills layout, so existing skill folders work as they are. Code is in `space_agents/skills.py`.
+
+- **Choosing the folder:** Instructions → Skills → Enable skills, then pick the folder with the native picker. The
+  folder can be the skills folder itself, a folder that contains `skills/`, or a single skill. The editor previews
+  what it found (`list_skills`) and flags problems, such as a skill with no description or two skills with the same
+  name. Like data folders, a new skills folder must come from the native picker (architecture.md).
+- **Loading:** skills are re-read at the start of every run, so edits apply without re-saving the agent. The model
+  sees each skill's name and description in its system prompt. When a task matches one, it calls `use_skill(name)`,
+  which returns the instructions and the list of the skill's files. It then reads those files with
+  `read_document`, or passes Python scripts to `run_python`.
+- **Limits:** a skill's folder is readable but never writable, even inside a read & write grant: skills are trusted
+  instructions, so an agent mustn't be able to rewrite them. Shell and Node scripts can't run (there's no shell).
+  Python scripts run in the sandbox with its packages. The sandbox puts input files side by side, so scripts that
+  import their own modules from subfolders may need the model's help.
+- **Scale:** up to 100 skills, descriptions up to 1,024 characters, and `SKILL.md` up to 512 KB.

@@ -10,6 +10,7 @@ How agents read files, run code, and change files safely. Design rationale is in
 | `read_document(path, pages?)` | Text of PDF/DOCX/XLSX/PPTX/text, a page range at a time | `documents/` |
 | `search_document(path, query)` | BM25 search over a document's pages (SQLite FTS5) | `documents/library.py` |
 | `run_python(description, code, input_files?, output_folder?)` | Python in the Pyodide sandbox; outputs become proposed changes | `sandbox/`, `changes.py` |
+| `use_skill(name)` | Only when the agent has skills: returns the skill's instructions and its file list. The skill's files are readable by the other tools, never writable (agents.md) | `skills.py` |
 
 Every path goes through `FolderAccess` (`tools/access.py`):
 - **Resolution:** `realpath` + containment in a granted folder.

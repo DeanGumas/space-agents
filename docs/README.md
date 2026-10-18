@@ -22,6 +22,8 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - proposed changes with Apply / Undo, and Discard with feedback that the agent acts on
   - the Activity tab and desktop notifications for anything awaiting approval
   - a resizable sidebar and a right-click menu (Edit, Duplicate)
+  - skills: a folder of SKILL.md skills per agent ([agents.md](agents.md))
+  - compaction of long runs ([architecture.md](architecture.md))
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
 - **Not yet built:**

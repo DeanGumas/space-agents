@@ -29,6 +29,7 @@ from space_agents.manifest import Manifest
 from space_agents.runtime import compaction
 from space_agents.runtime.prompts import system_prompt
 from space_agents.sandbox.pyodide import PyodideSandbox
+from space_agents.skills import SkillSet, load_skills
 from space_agents.store import Store, now_iso
 from space_agents.tools.registry import ToolBox
 
@@ -98,6 +99,10 @@ class AgentRunner:
         """Answer the latest user message for `agent`, writing into the (already created) agent message."""
         config = self.config
         model = agent.model.name or (config.models[0] if config.models else "")
+        # Re-read every run, so edits to the skills take effect without re-saving the agent.
+        skills = load_skills(agent.skills.folder) if agent.skills.enabled else SkillSet()
+        for problem in skills.problems:
+            log.warning("Skills for %s: %s", agent.id, problem)
         tools = ToolBox(
             agent=agent,
             message_id=message_id,
@@ -106,9 +111,10 @@ class AgentRunner:
             changes=self._changes,
             protected=[config.data_dir],
             extra_file_types=config.extra_file_types,
+            skills=skills,
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(agent, tools.access)},
+            {"role": "system", "content": system_prompt(agent, tools.access, skills)},
             *self._history(agent.id, message_id),
         ]
         text, usage, status = "", {}, "done"
@@ -312,4 +318,5 @@ def _pending_summary(name: str, args: dict[str, Any]) -> str:
         "search_document": f"Searching {path}" if path else "Searching a document",
         "run_python": str(args.get("description") or "Running analysis")[:200],
         "compact_context": "Summarizing earlier work to free up space",
+        "use_skill": f"Using the {args['name']} skill" if args.get("name") else "Using a skill",
     }.get(name, name)

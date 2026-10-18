@@ -86,6 +86,7 @@ class Root:
     path: Path  # resolved
     display: str  # as written in the manifest, e.g. ~/Documents/PO Reports
     writable: bool
+    skill: bool = False  # a skill's folder: readable, never writable (see skills.py)
 
 
 def display_path(p: Path) -> str:
@@ -96,33 +97,43 @@ def display_path(p: Path) -> str:
 
 
 class FolderAccess:
-    def __init__(self, grants: list[FolderGrant], protected: list[Path] = (), extra_file_types: Iterable[str] = ()):
+    def __init__(
+        self,
+        grants: list[FolderGrant],
+        protected: list[Path] = (),
+        extra_file_types: Iterable[str] = (),
+        skill_folders: Iterable[Path] = (),
+    ):
         self.roots = [
             Root(Path(os.path.expanduser(g.path)).resolve(), g.path, g.access == "read_write") for g in grants
         ]
+        self.skill_roots = [Root(p.resolve(), display_path(p.resolve()), False, skill=True) for p in skill_folders]
         self._protected = [p.resolve() for p in protected]
         self.file_types = file_types(extra_file_types)
 
     def resolve(self, raw: str, *, write: bool = False) -> Path:
         """Turn a path from the model into a safe absolute path, or raise AccessDenied with a helpful message."""
-        if not self.roots:
+        everywhere = [*self.roots, *self.skill_roots]
+        if not everywhere:
             raise AccessDenied("This agent has no folders. The user can add some in the agent's Files & folders tab.")
         raw = (raw or "").strip().strip('"').strip("'")
-        p = Path(os.path.expanduser(raw)) if raw else self.roots[0].path
+        p = Path(os.path.expanduser(raw)) if raw else everywhere[0].path
         if not p.is_absolute():
             # Relative paths: try each granted folder, preferring one where the path exists.
-            candidates = [r.path / p for r in self.roots]
+            candidates = [r.path / p for r in everywhere]
             p = next((c for c in candidates if c.exists()), candidates[0])
         real = p.resolve()
         root = self.root_for(real)
         if root is None:
-            folders = ", ".join(r.display for r in self.roots)
+            folders = ", ".join(r.display for r in self.roots) or "none"
             raise AccessDenied(f"{display_path(real)} is outside this agent's folders ({folders}).")
         parts = set(real.relative_to(root.path).parts) | {real.name}
         if parts & DENY_NAMES or real.name.lower().endswith(DENY_SUFFIXES):
             raise AccessDenied(f"{display_path(real)} is a protected location and can't be accessed.")
         if any(real == prot or real.is_relative_to(prot) for prot in self._protected):
             raise AccessDenied(f"{display_path(real)} is a protected location and can't be accessed.")
+        if write and root.skill:
+            raise AccessDenied("Skills are read-only: agents can't change them. Save your work to a regular folder.")
         if write and not root.writable:
             raise AccessDenied(f"{root.display} is read-only for this agent, so files can't be saved there.")
         if write and write_protected(real):
@@ -144,7 +155,7 @@ class FolderAccess:
             raise AccessDenied(f"Agents can't save {kind}. Allowed types: {', '.join(sorted(self.file_types))}.")
 
     def root_for(self, real: Path) -> Root | None:
-        matches = [r for r in self.roots if real == r.path or real.is_relative_to(r.path)]
+        matches = [r for r in (*self.roots, *self.skill_roots) if real == r.path or real.is_relative_to(r.path)]
         return max(matches, key=lambda r: len(r.path.parts)) if matches else None  # most specific grant wins
 
     def describe(self) -> str:

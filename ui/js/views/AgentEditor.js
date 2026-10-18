@@ -6,7 +6,7 @@
 // toPayload() turns a draft into what bridge.save_agent expects.
 
 import { html } from "htm/preact";
-import { useState, useMemo } from "preact/hooks";
+import { useEffect, useState, useMemo } from "preact/hooks";
 import { Avatar, Field, Icon, Modal, Notice, SwitchRow } from "../components/common.js";
 import { AvatarPicker } from "../components/AvatarPicker.js";
 import { boot, closeDialog, saveAgent, deleteAgent, selectAgent, toast, toastError } from "../state.js";
@@ -15,7 +15,7 @@ import { clone, cx, setPath } from "../lib/util.js";
 
 const TABS = [
   { id: "general", label: "General", icon: "id-card", owns: ["name", "description", "avatar"] },
-  { id: "instructions", label: "Instructions", icon: "file-text", owns: ["instructions"] },
+  { id: "instructions", label: "Instructions", icon: "file-text", owns: ["instructions", "skills"] },
   { id: "model", label: "Model", icon: "cpu", owns: ["model", "compaction"] },
   { id: "sources", label: "Data sources", icon: "server", owns: ["mcp_servers"] },
   { id: "files", label: "Files & folders", icon: "folder", owns: ["filesystem", "file_changes"] },
@@ -209,6 +209,73 @@ function InstructionsTab({ draft, set, err }) {
     <${Notice} icon="lightbulb">
       Tip: be specific about what "important" means to you, e.g. "a delivery date slipping more than 3 days".
     <//>
+    <${SkillsSection} draft=${draft} set=${set} err=${err} />
+  `;
+}
+
+function SkillsSection({ draft, set, err }) {
+  const skills = draft.skills;
+  const [found, setFound] = useState(null); // {skills: [{name, description}], problems: [...]}
+  useEffect(() => {
+    setFound(null);
+    if (!skills.enabled || !skills.folder) return;
+    let live = true;
+    call("list_skills", skills.folder)
+      .then((r) => live && setFound(r))
+      .catch((e) => live && setFound({ skills: [], problems: [e.message] }));
+    return () => {
+      live = false;
+    };
+  }, [skills.enabled, skills.folder]);
+
+  const choose = async () => {
+    try {
+      const picked = await call("pick_folder");
+      if (picked) set("skills.folder", picked.path);
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  const hiddenTip =
+    boot.value?.platform === "darwin" ? " For a hidden folder like ~/.claude/skills, press ⌘⇧. in the picker." : "";
+
+  return html`
+    <h3>Skills</h3>
+    <p class="lead">
+      Ready-made instructions for specific kinds of tasks, like filling in a form or writing a report in your team's
+      format. The agent picks the right skill when a task calls for it.
+    </p>
+    <${SwitchRow}
+      title="Enable skills"
+      help="Let this agent use a folder of skills. It can read them but never change them."
+      on=${skills.enabled}
+      onChange=${(v) => set("skills.enabled", v)}
+    />
+    ${skills.enabled &&
+    html`<${Field}
+        label="Skills folder"
+        help=${`One subfolder per skill, each with a SKILL.md inside.${hiddenTip}`}
+        error=${err("skills.folder")}
+      >
+        <div class="folder-row">
+          <${Icon} name="graduation-cap" />
+          <span class="path" title=${skills.folder}>${skills.folder || "No folder chosen yet"}</span>
+          <button class="btn sm" onClick=${choose}><${Icon} name="folder-open" /> Choose folder…</button>
+        </div>
+      <//>
+      ${found?.problems?.length > 0 &&
+      html`<${Notice} icon="triangle-alert" kind="warning">
+        ${found.problems.map((p) => html`<div>${p}</div>`)}
+      <//>`}
+      ${found?.skills?.length > 0 &&
+      html`<div class="card-list skill-list">
+        ${found.skills.map(
+          (s) => html`<div class="card">
+            <div class="skill-name">${s.name}</div>
+            <div class="desc">${s.description}</div>
+          </div>`,
+        )}
+      </div>`}`}
   `;
 }
 

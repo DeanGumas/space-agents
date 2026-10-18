@@ -21,6 +21,7 @@ from space_agents.documents.extract import UnsupportedDocument
 from space_agents.documents.library import DocumentLibrary
 from space_agents.manifest import Manifest
 from space_agents.sandbox.pyodide import PyodideSandbox, RunResult, SandboxUnavailable
+from space_agents.skills import SkillSet, use_skill_result
 from space_agents.tools.access import AccessDenied, FolderAccess, display_path
 
 log = logging.getLogger(__name__)
@@ -181,6 +182,23 @@ print(json.dumps(out))
 """
 
 
+USE_SKILL_SPEC: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "use_skill",
+        "description": (
+            "Load a skill's instructions (see Skills in your instructions). Call it before starting a task that "
+            "matches a skill's description, then follow what it says."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "The skill's name, exactly as listed."}},
+            "required": ["name"],
+        },
+    },
+}
+
+
 @dataclass
 class ToolOutcome:
     result: str
@@ -200,16 +218,19 @@ class ToolBox:
         changes: ChangeManager,
         protected: list[Path],
         extra_file_types: list[str] = (),
+        skills: SkillSet | None = None,
     ):
         self.agent = agent
         self.message_id = message_id
         self.docs = docs
         self.sandbox = sandbox
         self.changes = changes
-        self.access = FolderAccess(agent.filesystem, protected, extra_file_types)
+        self.skills = skills or SkillSet()
+        folders = [s.folder for s in self.skills.skills]
+        self.access = FolderAccess(agent.filesystem, protected, extra_file_types, skill_folders=folders)
 
     def specs(self) -> list[dict[str, Any]]:
-        return TOOL_SPECS
+        return [*TOOL_SPECS, USE_SKILL_SPEC] if self.skills.skills else TOOL_SPECS
 
     async def call(self, name: str, args: dict[str, Any], tool_call_id: int | None = None) -> ToolOutcome:
         try:
@@ -221,6 +242,8 @@ class ToolBox:
                 return await self._search(str(args.get("path") or ""), str(args.get("query") or ""))
             if name == "run_python":
                 return await self._run_python(args, tool_call_id)
+            if name == "use_skill" and self.skills.skills:
+                return self._use_skill(str(args.get("name") or ""))
             return ToolOutcome(f"Unknown tool {name!r}.", f"Unknown tool {name}", ok=False)
         except (AccessDenied, UnsupportedDocument, FileNotFoundError, SandboxUnavailable, ValueError) as e:
             msg = str(e) if not isinstance(e, FileNotFoundError) else f"File not found: {e.filename or e}"
@@ -267,6 +290,13 @@ class ToolBox:
     async def _search(self, raw: str, query: str) -> ToolOutcome:
         path = self.access.resolve(raw)
         return ToolOutcome(await self.docs.search(path, path.name, query), f"Searched {path.name} for “{query}”")
+
+    def _use_skill(self, name: str) -> ToolOutcome:
+        skill = self.skills.get(name)
+        if skill is None:
+            names = ", ".join(s.name for s in self.skills.skills)
+            raise ValueError(f"There's no skill named {name!r}. Available skills: {names}.")
+        return ToolOutcome(use_skill_result(skill), f"Used the {skill.name} skill")
 
     # --- sandbox ----------------------------------------------------------------------------------------------
 
@@ -490,6 +520,12 @@ def _size(n: int) -> str:
 
 
 def _failed_summary(name: str, args: dict[str, Any]) -> str:
-    target = args.get("path") or args.get("folder") or args.get("description") or ""
-    label = {"list_files": "List files", "read_document": "Read", "search_document": "Search", "run_python": "Run"}
+    target = args.get("path") or args.get("folder") or args.get("description") or args.get("name") or ""
+    label = {
+        "list_files": "List files",
+        "read_document": "Read",
+        "search_document": "Search",
+        "run_python": "Run",
+        "use_skill": "Use skill",
+    }
     return f"{label.get(name, name)} {Path(str(target)).name if 'path' in args else target}".strip()

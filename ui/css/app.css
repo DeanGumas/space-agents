@@ -1148,6 +1148,18 @@ input[type="radio"] {
   color: var(--warning);
 }
 
+.skill-list {
+  margin-bottom: 24px;
+}
+.skill-list .skill-name {
+  font: 600 13px var(--font-mono);
+}
+.skill-list .desc {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .empty-box {
   padding: 24px;
   border: 1px dashed var(--border-strong);

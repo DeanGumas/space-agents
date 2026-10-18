@@ -57,6 +57,14 @@ class Compaction:
 
 
 @dataclass
+class Skills:
+    """A folder of skills (each a subfolder with a SKILL.md) the agent can use; see space_agents/skills.py."""
+
+    enabled: bool = False
+    folder: str = ""
+
+
+@dataclass
 class ServerGrant:
     id: str
     tools: str | list[str] = "read_only"  # "read_only" or an explicit list of tool names
@@ -121,6 +129,7 @@ class Manifest:
     avatar: Avatar = field(default_factory=Avatar)
     description: str = ""
     instructions: str = ""
+    skills: Skills = field(default_factory=Skills)
     model: ModelConfig = field(default_factory=ModelConfig)
     compaction: Compaction = field(default_factory=Compaction)
     mcp_servers: list[ServerGrant] = field(default_factory=list)
@@ -263,6 +272,11 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
     mr = r.sub("model")
     model = ModelConfig(name=mr.str("name", "", max_len=200), temperature=mr.float("temperature", 0.2, 0.0, 2.0))
 
+    sk = r.sub("skills")
+    skills = Skills(enabled=sk.bool("enabled", False), folder=sk.str("folder", "", max_len=1024))
+    if skills.enabled and not skills.folder:
+        sk.err("folder", "Choose the folder your skills are in.")
+
     cr = r.sub("compaction")
     compaction = Compaction(
         enabled=cr.bool("enabled", True),
@@ -341,6 +355,7 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
         avatar=avatar,
         description=r.str("description", "", max_len=280),
         instructions=r.str("instructions", "", max_len=20_000),
+        skills=skills,
         model=model,
         compaction=compaction,
         mcp_servers=servers,

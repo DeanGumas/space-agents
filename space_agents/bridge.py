@@ -40,6 +40,7 @@ from space_agents.runtime.dummy import dummy_reply
 from space_agents.runtime.loop import AgentRunner
 from space_agents.sandbox.pyodide import PyodideSandbox, warm_packages
 from space_agents.settings import UserSettings, clean_overrides
+from space_agents.skills import load_skills
 from space_agents.store import NotFound, Store
 from space_agents.tools.access import write_protected
 
@@ -282,6 +283,8 @@ class Api:
 
         Read & write is refused on system, app-settings, and hidden folders: files there can run code by themselves.
         (FolderAccess blocks writes there anyway; this tells the user up front.)
+
+        The skills folder follows the same picker rule: skills are instructions the agent trusts.
         """
         known = (
             self._picked_folders
@@ -297,8 +300,30 @@ class Api:
                     "This is a system, app-settings, or hidden folder, so agents can't save files here. "
                     "Choose Read only, or pick a regular folder."
                 )
+        known_skills = self._picked_folders | ({folder_key(old.skills.folder)} if old and old.skills.folder else set())
+        if new.skills.folder and folder_key(new.skills.folder) not in known_skills:
+            errors["skills.folder"] = "Choose this folder with the Choose folder… button."
         if errors:
             raise ManifestError(errors)
+
+    @endpoint
+    def list_skills(self, folder: str) -> dict[str, Any]:
+        """Preview the skills in a folder for the editor: names, descriptions, and anything wrong with them.
+
+        Only for folders the user picked or an agent already uses, so the page can't probe the disk.
+        """
+        if not isinstance(folder, str) or not folder.strip():
+            return {"skills": [], "problems": []}
+        known = self._picked_folders | {
+            folder_key(m.skills.folder) for m in self._store.list_agents() if m.skills.folder
+        }
+        if folder_key(folder) not in known:
+            raise UserError("Choose the skills folder with the Choose folder… button.")
+        found = load_skills(folder)
+        return {
+            "skills": [{"name": s.name, "description": s.description} for s in found.skills],
+            "problems": found.problems,
+        }
 
     @endpoint
     def duplicate_agent(self, agent_id: str) -> dict[str, Any]:

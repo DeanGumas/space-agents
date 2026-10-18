@@ -404,3 +404,34 @@ async def test_compaction_can_be_turned_off(env, tmp_path):
     client = ScriptedClient([big_read(1_000), big_read(9_500), ChatResult(content="Done.")])
     await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Any Acme delays?")
     assert len(client.requests) == 3 and all(r["tools"] for r in client.requests[:2])
+
+
+async def test_agent_uses_a_skill(env, tmp_path):
+    *_, agent, _ = env
+    skill = tmp_path / "skills" / "po-report"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: po-report\ndescription: Weekly PO status report in our format.\n---\nUse template.md."
+    )
+    (skill / "template.md").write_text("# PO status\n| PO | Status |")
+    agent.skills.enabled, agent.skills.folder = True, str(tmp_path / "skills")
+    client = ScriptedClient(
+        [
+            ChatResult(tool_calls=[ToolCall(id="c1", name="use_skill", arguments='{"name": "po-report"}')]),
+            ChatResult(tool_calls=[call("read_document", path=str(skill / "template.md"))]),
+            ChatResult(content="Here's the report."),
+        ]
+    )
+    await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Write the weekly PO report")
+    first = client.requests[0]
+    assert "- po-report: Weekly PO status report in our format." in first["messages"][0]["content"]
+    assert "use_skill" in [t["function"]["name"] for t in first["tools"]]
+    assert "Use template.md." in client.requests[1]["messages"][-1]["content"]
+    assert "| PO | Status |" in client.requests[2]["messages"][-1]["content"]  # skill files are readable
+
+
+async def test_no_skill_tool_when_skills_are_off(env, tmp_path):
+    client = ScriptedClient([ChatResult(content="Hi.")])
+    await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Hello")
+    assert "use_skill" not in [t["function"]["name"] for t in client.requests[0]["tools"]]
+    assert "## Skills" not in client.requests[0]["messages"][0]["content"]

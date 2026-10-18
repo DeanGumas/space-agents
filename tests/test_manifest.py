@@ -91,3 +91,8 @@ def test_compaction_defaults_and_validation():
     assert set(errors_for({"name": "x", "compaction": {"trigger_tokens": 100}})) == {"compaction.trigger_tokens"}
     errors = errors_for({"name": "x", "compaction": {"trigger_tokens": 20_000, "summary_tokens": 10_000}})
     assert "quarter" in errors["compaction.summary_tokens"]
+
+
+def test_skills_need_a_folder_when_enabled():
+    assert Manifest.from_dict({"name": "x"}).skills.enabled is False
+    assert set(errors_for({"name": "x", "skills": {"enabled": True}})) == {"skills.folder"}

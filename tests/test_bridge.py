@@ -430,3 +430,27 @@ def test_sensitive_folders_cannot_be_read_and_write(env, tmp_path, monkeypatch):
     assert res["ok"] is False and "can't save files here" in res["fields"]["filesystem.0.path"]
     assert api._fake_window.asked == []  # refused before asking
     ok(api.save_agent({"name": "Reader", "filesystem": [{"path": path, "access": "read"}]}))
+
+
+def test_skills_folder_must_come_from_the_picker(env, tmp_path):
+    api, _ = env
+    skills = tmp_path / "skills" / "report"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text("---\ndescription: Our report format.\n---\nBody")
+    folder = str(tmp_path / "skills")
+    payload = {"name": "Skilled", "skills": {"enabled": True, "folder": folder}}
+
+    res = api.save_agent(payload)
+    assert res["ok"] is False and set(res["fields"]) == {"skills.folder"}
+    assert api.list_skills(folder)["ok"] is False  # the page can't probe folders it wasn't given
+
+    api._fake_window.next_folder = folder
+    ok(api.pick_folder())
+    assert ok(api.list_skills(folder)) == {
+        "skills": [{"name": "report", "description": "Our report format."}],
+        "problems": [],
+    }
+    agent = ok(api.save_agent(payload))
+    api._picked_folders.clear()
+    ok(api.save_agent({**agent, "description": "edited"}))  # an agent's own folder needs no re-picking
+    assert ok(api.list_skills(folder))["skills"]  # and can still be previewed

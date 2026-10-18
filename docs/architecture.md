@@ -110,6 +110,7 @@ changes.
 | Lifecycle | `ping`, `ui_ready`, `bootstrap` |
 | Agents | `list_agents`, `save_agent`, `duplicate_agent`, `delete_agent` |
 | Chat | `list_messages` (with tool calls and changes), `send_message`, `stop_agent` |
+| Skills | `list_skills(folder)` (editor preview; only for picked folders or folders agents already use) |
 | Activity | `attention` (also in `bootstrap`), `set_ui_state(focused, viewing)` (window focus + open conversation, for notifications) |
 | Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
 | Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
@@ -127,6 +128,7 @@ user to act in native UI, which the page can't script:
 | Granting an agent a folder it didn't have | The folder was chosen in the native picker this session (`pick_folder`), or comes from a built-in template. Otherwise `save_agent` rejects it as a field error |
 | Read & write on a folder (new, or upgraded from read only) | OK in a native confirmation dialog on save |
 | "Existing files: apply without asking" (`allow_with_backup`) on an agent with a writable folder | Same dialog |
+| A new skills folder | Chosen in the native picker this session (skills are instructions the agent trusts) |
 | A new server address (`save_endpoint_overrides`) | OK in a native dialog: the API key and agent data will go there. Clearing an override (back to the build default) doesn't ask |
 
 The dialogs go through `Api._confirm`. With no window (headless), the answer is always no, and tests inject a fake.
@@ -146,6 +148,7 @@ space_agents/
   manifest.py    agent manifest dataclasses + validation (see agents.md)
   store.py       agents/*.json, avatars/*.png, space.db schema/migrations + query helpers
   catalog.py     tool-server catalog (dev file for now) + agent templates
+  skills.py      agent skills: find SKILL.md folders, parse their headers, what use_skill returns
   paths.py       resource dir (dev vs PyInstaller bundle), per-OS data/log dirs
   defaults.json  build-time defaults (org URLs get baked in here)
   server.py      WSGI app: UI files, sandbox worker CSP header, token-scoped workspace routes
