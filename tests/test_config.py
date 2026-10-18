@@ -82,3 +82,15 @@ def test_describe_marks_editability(tmp_path):
     assert by_key["mcp_base_url"]["editable"] is False  # env wins, so editing would do nothing
     assert by_key["data_dir"]["editable"] is False
     json.dumps(cfg.describe())  # must be serializable for the bridge
+
+
+def test_sandbox_warmup_modes(tmp_path):
+    from space_agents.sandbox.pyodide import warm_packages
+
+    cfg = load_config(
+        environ={"SPACE_AGENTS_DATA_DIR": str(tmp_path)}, dotenv_path=False, defaults_path=make_defaults(tmp_path)
+    )
+    assert warm_packages(cfg.get("sandbox_warmup")) == ["openpyxl", "pandas"]  # default: full
+    assert warm_packages("light") == ["openpyxl"]
+    assert warm_packages("off") is None and warm_packages("0") is None and warm_packages("false") is None
+    assert warm_packages("1") == ["openpyxl", "pandas"] and warm_packages("bogus") == ["openpyxl", "pandas"]

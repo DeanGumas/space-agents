@@ -33,13 +33,14 @@ from space_agents.platform.appearance import open_in_file_manager
 from space_agents.platform.notify import Notifier
 from space_agents.runtime.dummy import dummy_reply
 from space_agents.runtime.loop import AgentRunner
-from space_agents.sandbox.pyodide import PyodideSandbox
+from space_agents.sandbox.pyodide import PyodideSandbox, warm_packages
 from space_agents.settings import UserSettings
 from space_agents.store import NotFound, Store
 
 log = logging.getLogger(__name__)
 
 MAX_MESSAGE_CHARS = 20_000
+SANDBOX_WARMUP_DELAY = 3.0  # seconds after the UI is ready
 
 
 class UserError(Exception):
@@ -149,6 +150,12 @@ class Api:
                 lambda payload: window.run_js(f"window.__spaceEvents && window.__spaceEvents({payload})")
             )
             self._sandbox.attach(window.run_js)
+            packages = warm_packages(self._config.get("sandbox_warmup"))
+            if packages is not None:
+                # A few seconds after launch, so the window is responsive first.
+                self._core.loop.call_soon_threadsafe(
+                    lambda: self._core.loop.call_later(SANDBOX_WARMUP_DELAY, self._sandbox.warm, packages)
+                )
         log.info("UI ready: %s", info or {})
         if self._on_ui_ready:
             self._on_ui_ready(info or {})
@@ -364,6 +371,15 @@ class Api:
             open_in_file_manager(str(path.parent))
 
     # --- sandbox ------------------------------------------------------------------------------------------------
+
+    @endpoint
+    def sandbox_warmed(self, info: dict[str, Any] | None = None) -> None:
+        """Called by ui/js/sandbox.js when the background warm-up finishes."""
+        info = info if isinstance(info, dict) else {}
+        if info.get("error"):
+            log.warning("Sandbox warm-up failed: %s", info["error"])
+        else:
+            log.info("Sandbox warm in %.1f s", (info.get("ms") or 0) / 1000)
 
     @endpoint
     def sandbox_done(self, run_id: str, result: dict[str, Any]) -> None:

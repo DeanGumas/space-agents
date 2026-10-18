@@ -31,6 +31,22 @@ SAFE_NAME = re.compile(r"^[^/\\:\x00]{1,200}$")
 MAX_OUTPUT_BYTES = 100 * 1024 * 1024
 MAX_OUTPUT_FILES = 20
 DEFAULT_TIMEOUT = 90.0  # includes first-use load of Pyodide + packages
+# Warm-up modes (setting `sandbox_warmup`): packages pre-imported at launch. Measured on macOS: the sandbox costs
+# ~420 MB once pandas is loaded, which happens on first pandas use anyway; warm-up just pays it up front.
+#   full  → ~420 MB idle, first pandas+openpyxl run ~0.5 s     light → ~210 MB idle, openpyxl instant, pandas ~8 s
+# matplotlib (charts) always loads on demand.
+WARM_MODES = {"full": ["openpyxl", "pandas"], "light": ["openpyxl"], "off": None}
+WARM_PACKAGES = WARM_MODES["full"]
+
+
+def warm_packages(mode: str) -> list[str] | None:
+    """Setting value → package list (None = no warm-up). Also accepts true/false-style values."""
+    mode = str(mode).strip().lower()
+    if mode in ("0", "false", "no", "none", "off", ""):
+        return None
+    if mode in ("1", "true", "yes", "on"):
+        return WARM_MODES["full"]
+    return WARM_MODES.get(mode, WARM_MODES["full"])
 
 
 def safe_name(name: str) -> bool:
@@ -74,6 +90,13 @@ class PyodideSandbox:
     def attach(self, run_js: Callable[[str], Any]) -> None:
         """Called once the UI is ready: run_js executes JavaScript in the main window."""
         self._run_js = run_js
+
+    def warm(self, packages: list[str] | None = None) -> None:
+        """Boot Pyodide and pre-import common packages in the background, so the first run is fast."""
+        if self._run_js is None:
+            return
+        packages = WARM_PACKAGES if packages is None else packages
+        self._run_js(f"window.__sandbox && window.__sandbox.warm({json.dumps(packages)})")
 
     @property
     def available(self) -> bool:

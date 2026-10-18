@@ -63,6 +63,22 @@ registry.run_python ──► PyodideSandbox.run(code, sources, aliases)       s
 
 `--sandbox-selftest` verifies all of this in the real webview (run it on each OS).
 
+### Warm-up
+
+Three seconds after launch, the worker boots Pyodide and pre-imports the document libraries in the background, so an
+agent's first `run_python` doesn't wait. If a run is killed for timing out, the replacement worker re-warms itself.
+Each run still gets a fresh `/work` folder and namespace; only the loaded libraries are shared.
+
+| `SPACE_AGENTS_SANDBOX_WARMUP` | Preloads | Extra memory while idle | First pandas + openpyxl run |
+|---|---|---|---|
+| `full` (default) | Pyodide, openpyxl, pandas | ~420 MB | ~0.2–1 s |
+| `light` | Pyodide, openpyxl | ~210 MB | ~8 s (openpyxl-only edits are instant) |
+| `off` | nothing | 0 | ~18–20 s |
+
+Measured on macOS (WKWebView). The memory is the same in every mode once an agent has used pandas, because
+WebAssembly memory doesn't shrink. Warm-up only moves the cost to launch; it doesn't add to it. The log shows
+"Sandbox warm in N s".
+
 ### Guardrails for small models
 
 Learned from live runs with gpt-5-nano:

@@ -135,8 +135,29 @@ function sameBytes(a, b) {
 
 let queue = Promise.resolve();
 
+// Warm-up: boot Pyodide and import the usual document libraries ahead of time, so the first real run doesn't pay
+// for it. Goes through the same queue as runs, so a run that arrives early simply waits for the warm-up to finish.
+async function warm(packages) {
+  const started = performance.now();
+  const py = await getPyodide();
+  await py.loadPackage(packages, { messageCallback: () => {}, errorCallback: () => {} });
+  const modules = packages.map((p) => ({ "python-docx": "docx" })[p] || p.replace(/-/g, "_"));
+  py.runPython(modules.map((m) => `import ${m}`).join("\n"));
+  return Math.round(performance.now() - started);
+}
+
 self.onmessage = (event) => {
   const job = event.data;
+  if (job && job.type === "warm") {
+    queue = queue.then(async () => {
+      try {
+        self.postMessage({ type: "warm", ms: await warm(job.packages || []) });
+      } catch (e) {
+        self.postMessage({ type: "warm", error: String(e && e.message ? e.message : e) });
+      }
+    });
+    return;
+  }
   if (!job || job.type !== "run") return;
   // One run at a time: Pyodide is single-threaded and runs share /work.
   queue = queue.then(async () => {

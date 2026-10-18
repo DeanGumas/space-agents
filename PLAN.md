@@ -455,7 +455,8 @@ ToolBox ◄───────────────────────
   - `pandas`, `numpy`, `openpyxl` (+ `et_xmlfile`), `python-docx` (+ `lxml`), `pypdf`, `xlsxwriter`, `matplotlib`
   - Nothing installs at runtime.
   - Pandas' lazily imported engines (openpyxl/xlsxwriter, matplotlib for plots) are loaded with it.
-- **Runs:** one worker stays warm after first use (cold start ~3 s, warm runs ~instant). Every run gets a fresh
+- **Runs:** one worker, **warmed at launch** (a background preload of Pyodide + openpyxl + pandas, ~420 MB; mode
+  `full`/`light`/`off`) and re-warmed after a kill. The first agent run is <1 s instead of ~20 s. Every run gets a fresh
   `/work` directory and a fresh global namespace, and runs are serialized.
 - **Guardrails for small models**, learned from live gpt-5-nano runs:
   - **File paths in code:** files the code names are auto-mapped into the sandbox (host paths, `in/X`, `out/X`). This
@@ -1095,6 +1096,7 @@ delays with suggested next actions.
 | PDF speed | Measured: `pypdfium2` extracts ~460 text-heavy pages/s on an M-series Mac, so a 1,000-page PDF takes ~2 s |
 | Document processing | **Local first:** `pypdfium2` + stdlib OOXML, cached, with FTS5 search. The GPU document server (`convert_document`, VLM optional) stays available to agents for scans and hard cases; automatic routing comes later (skills) |
 | Code execution | **Pyodide** in a Web Worker: sandboxed Python (`run_python`), copies in, proposals out. Docker rejected as the default (admin rights, licensing, weight) |
+| Sandbox warm-up | Preload at launch by default (`full`, ~420 MB, the same memory first use would cost anyway); `light`/`off` for low-memory machines |
 | Small-model guardrails | Make the sandbox meet models halfway (path mapping, revisions, diff feedback, date repair) rather than relying on prompts alone; put key instructions in tool results |
 | File writes | **Proposed changes:** new files are allowed by default; edits to existing files need approval by default; every overwrite is versioned; no deletes. Discard can carry feedback that the agent acts on |
 | Attachments | Drag-and-drop or upload in chat; snapshotted into app data; per-file read grant for that agent |

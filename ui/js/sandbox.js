@@ -7,6 +7,7 @@ import { call, reportError } from "./api.js";
 
 let worker = null;
 const pending = new Map(); // run_id -> job
+let warmPackages = null; // set by warm(); a replacement worker re-warms with the same list
 
 function str(v, max) {
   return typeof v === "string" ? v.slice(0, max) : "";
@@ -22,6 +23,11 @@ function ensureWorker() {
   worker = new Worker("/sandbox/worker.js", { type: "module" });
   worker.onmessage = (event) => {
     const msg = event.data;
+    if (msg && msg.type === "warm") {
+      const info = { ms: typeof msg.ms === "number" ? msg.ms : null, error: msg.error ? str(String(msg.error), 500) : null };
+      call("sandbox_warmed", info).catch(reportError);
+      return;
+    }
     if (!msg || msg.type !== "result" || typeof msg.run_id !== "string" || !pending.has(msg.run_id)) return;
     finish(msg.run_id, {
       ok: msg.ok === true,
@@ -47,6 +53,14 @@ function kill(runId) {
     if (id !== runId) finish(id, { ok: false, error: "Interrupted because another run was stopped.", outputs: [] });
   }
   if (runId) pending.delete(runId);
+  // Keep the sandbox ready: warm a replacement worker in the background.
+  // (If a new run arrives first, the warm-up just queues behind it; loading is idempotent.)
+  if (warmPackages) setTimeout(() => warm(warmPackages), 500);
+}
+
+function warm(packages) {
+  warmPackages = Array.isArray(packages) ? packages.filter((p) => typeof p === "string") : [];
+  ensureWorker().postMessage({ type: "warm", packages: warmPackages });
 }
 
 window.__sandbox = {
@@ -55,4 +69,5 @@ window.__sandbox = {
     ensureWorker().postMessage({ type: "run", ...job });
   },
   kill,
+  warm,
 };

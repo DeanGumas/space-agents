@@ -30,6 +30,7 @@ current value comes from `default` or `user`; a value from `.env`/env/CLI would 
 | `models` | `SPACE_AGENTS_MODELS` | list | Models offered in the editor; the first is the default for agents without one |
 | `api_key` | `SPACE_AGENTS_API_KEY` | secret | **Dev/test only.** Never shown in the UI (Settings shows "set"); moves to the OS keychain |
 | `reasoning_effort` | `SPACE_AGENTS_REASONING_EFFORT` | str | Default `low`; bounds reasoning tokens; dropped if a model rejects it |
+| `sandbox_warmup` | `SPACE_AGENTS_SANDBOX_WARMUP` | str | `full` (default) / `light` / `off`: preload the Python sandbox at launch (see documents-and-sandbox.md) |
 
 Behavior details:
 - URLs have trailing `/` stripped. `llm_base_url` also accepts a full endpoint URL (`…/v1/chat/completions` →

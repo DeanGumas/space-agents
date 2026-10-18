@@ -56,7 +56,7 @@ class Notifier:
                         "-e",
                         "on run argv",
                         "-e",
-                        "display notification (item 2 of argv) with title (item 1 of argv) sound name \"default\"",
+                        'display notification (item 2 of argv) with title (item 1 of argv) sound name "default"',
                         "-e",
                         "end run",
                         title,

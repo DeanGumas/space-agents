@@ -45,6 +45,12 @@ SPECS: tuple[Spec, ...] = (
     ),
     Spec("api_key", "secret", "API key", "Dev/test only via .env; moves to the OS keychain with onboarding"),
     Spec(
+        "sandbox_warmup",
+        "str",
+        "Sandbox warm-up",
+        "Preload the Python sandbox at launch: full (~420 MB, first run <1 s), light (~210 MB), or off",
+    ),
+    Spec(
         "reasoning_effort",
         "str",
         "Reasoning effort",
@@ -201,6 +207,7 @@ def load_config(
     defaults.setdefault("debug", False)
     defaults.setdefault("api_key", "")
     defaults.setdefault("reasoning_effort", "low")
+    defaults.setdefault("sandbox_warmup", "full")
 
     if dotenv_path is True:
         dotenv_path = find_dotenv()
