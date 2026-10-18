@@ -4,9 +4,10 @@ import { html } from "htm/preact";
 import { useState, useRef, useLayoutEffect, useEffect } from "preact/hooks";
 import { Avatar, Icon } from "../components/common.js";
 import { ActivitySteps, ChangeCards } from "../components/Activity.js";
-import { messages, sendMessage, stopAgent, openEditor, toastError, boot, focusChange } from "../state.js";
+import { RunReport } from "../components/Report.js";
+import { messages, sendMessage, stopAgent, runAgent, openEditor, toastError, boot, focusChange } from "../state.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { cx, formatTime, formatDay, isSameDay, scheduleSummary } from "../lib/util.js";
+import { cx, formatTime, formatDay, isSameDay, nextRunLabel, scheduleSummary } from "../lib/util.js";
 import { toDraft } from "./AgentEditor.js";
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
@@ -23,11 +24,18 @@ export function Channel({ agent }) {
   `;
 }
 
+const STATUS_LABELS = { responding: "Responding", running: "Running its task" };
+
 function ChannelHeader({ agent, onEdit }) {
-  const busy = agent.status === "responding";
+  const busy = agent.status !== "idle";
   const sub = agent.description || scheduleSummary(agent.schedule) || "No description";
   const llm = boot.value?.llm || {};
   const model = agent.model?.name || (llm.ready ? llm.default_model : "");
+  const runBlocked = !agent.task?.trim()
+    ? "Give this agent a task first (Edit → Schedule)"
+    : !llm.ready
+      ? "Runs need a model (see Settings)"
+      : null;
   return html`
     <header class="channel-header">
       <${Avatar} agent=${agent} size=${32} />
@@ -36,13 +44,22 @@ function ChannelHeader({ agent, onEdit }) {
         <div class="sub">${sub}</div>
       </div>
       ${busy
-        ? html`<span class="chip accent"><span class="status-dot busy"></span> Responding</span>`
+        ? html`<span class="chip accent"><span class="status-dot busy"></span> ${STATUS_LABELS[agent.status] || "Busy"}</span>`
         : !llm.ready &&
           html`<span class="chip warning" title="Set SPACE_AGENTS_LLM_BASE_URL and SPACE_AGENTS_API_KEY (see .env.example)">
             <${Icon} name="unplug" size="sm" /> Not connected
           </span>`}
+      ${agent.next_run_at &&
+      html`<span class="chip success" title=${`${scheduleSummary(agent.schedule)}. Runs only while Space Agents is open.`}>
+        <${Icon} name="clock" size="sm" /> ${nextRunLabel(agent.next_run_at)}
+      </span>`}
       ${model && html`<span class="chip" title="Model"><${Icon} name="cpu" size="sm" /> ${model}</span>`}
-      <button class="btn sm" disabled title="Scheduled and on-demand runs arrive in Phase 3">
+      <button
+        class="btn sm"
+        disabled=${!!runBlocked}
+        title=${runBlocked || "Do its task now and post a report"}
+        onClick=${() => runAgent(agent.id)}
+      >
         <${Icon} name="play" size="sm" /> Run now
       </button>
       <button class="btn sm" onClick=${onEdit}><${Icon} name="pencil" size="sm" /> Edit</button>
@@ -132,11 +149,17 @@ function Intro({ agent, onEdit }) {
 function Message({ msg, agent, first }) {
   const isUser = msg.role === "user";
   const streaming = msg.status === "streaming";
+  const run = msg.run;
   let body;
   if (isUser) {
     body = html`<div class="md" style=${{ whiteSpace: "pre-wrap" }}>${msg.content}</div>`;
+  } else if (msg.status === "queued") {
+    body = html`<div class="typing"><${Icon} name="hourglass" size="sm" /> Waiting for ${agent.name} to finish its
+      current work…</div>`;
+  } else if (run?.report && msg.status === "done") {
+    body = html`<${RunReport} run=${run} />`;
   } else if (streaming && !msg.content) {
-    body = msg.tool_calls?.length ? null : html`<div class="typing">Thinking…</div>`;
+    body = msg.tool_calls?.length ? null : html`<div class="typing">${run ? "Working on its task…" : "Thinking…"}</div>`;
   } else {
     body = html`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(msg.content) }}></div>
       ${streaming && html`<span class="cursor"></span>`}
@@ -155,6 +178,7 @@ function Message({ msg, agent, first }) {
         ${first &&
         html`<div class="head">
           <span class="author">${isUser ? "You" : agent.name}</span>
+          ${run && html`<span class="chip"><${Icon} name="play" size="sm" /> ${run.trigger === "schedule" ? "Scheduled run" : "Run"}</span>`}
           <span class="time">${formatTime(msg.created_at)}</span>
         </div>`}
         ${!isUser && html`<${ActivitySteps} calls=${msg.tool_calls} />`}
@@ -169,7 +193,7 @@ function Composer({ agent }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const ref = useRef(null);
-  const busy = agent.status === "responding";
+  const busy = agent.status !== "idle"; // messages sent now wait in the agent's queue
 
   useEffect(() => ref.current?.focus(), [agent.id]);
   useLayoutEffect(() => {
@@ -181,7 +205,7 @@ function Composer({ agent }) {
 
   const submit = async () => {
     const value = text.trim();
-    if (!value || busy || sending) return;
+    if (!value || sending) return;
     setSending(true);
     try {
       await sendMessage(agent.id, value);
@@ -210,18 +234,18 @@ function Composer({ agent }) {
             }
           }}
         ></textarea>
-        ${busy
-          ? html`<button class="btn icon-only" title="Stop" onClick=${() => stopAgent(agent.id)}>
-              <${Icon} name="square" />
-            </button>`
-          : html`<button
-              class="btn primary icon-only"
-              title="Send (Enter)"
-              disabled=${!text.trim() || sending}
-              onClick=${submit}
-            >
-              <${Icon} name="send-horizontal" />
-            </button>`}
+        ${busy &&
+        html`<button class="btn icon-only" title="Stop (and cancel anything waiting)" onClick=${() => stopAgent(agent.id)}>
+          <${Icon} name="square" />
+        </button>`}
+        <button
+          class="btn primary icon-only"
+          title=${busy ? "Send (it waits until the agent is free)" : "Send (Enter)"}
+          disabled=${!text.trim() || sending}
+          onClick=${submit}
+        >
+          <${Icon} name="send-horizontal" />
+        </button>
       </div>
       <div class="hint">Enter to send · Shift + Enter for a new line</div>
     </div>

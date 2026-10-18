@@ -57,6 +57,18 @@ export function initials(name) {
   return letters.toUpperCase();
 }
 
+/** "Next run 10:07", "Next run tomorrow 07:05", "Next run Mon 07:05" (next_run_at is local time, no zone). */
+export function nextRunLabel(iso) {
+  if (!iso) return null;
+  const when = new Date(iso);
+  const time = formatTime(iso);
+  const today = new Date();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  if (sameDay(when, today)) return `Next run ${time}`;
+  if (sameDay(when, tomorrow)) return `Next run tomorrow ${time}`;
+  return `Next run ${when.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 export function scheduleSummary(schedule) {
   if (!schedule?.enabled) return null;
   const m = schedule.every_minutes;

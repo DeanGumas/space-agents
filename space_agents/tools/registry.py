@@ -20,6 +20,7 @@ from space_agents.changes import ChangeManager
 from space_agents.documents.extract import UnsupportedDocument
 from space_agents.documents.library import DocumentLibrary
 from space_agents.manifest import Manifest
+from space_agents.runtime.reports import POST_REPORT_SPEC, parse_report
 from space_agents.sandbox.pyodide import PyodideSandbox, RunResult, SandboxUnavailable
 from space_agents.skills import SkillSet, use_skill_result
 from space_agents.tools.access import AccessDenied, FolderAccess, display_path
@@ -219,8 +220,11 @@ class ToolBox:
         protected: list[Path],
         extra_file_types: list[str] = (),
         skills: SkillSet | None = None,
+        run: bool = False,
     ):
         self.agent = agent
+        self.run = run  # a run (Run now / scheduled) rather than a chat: offers post_report
+        self.report: dict[str, Any] | None = None  # set when the model calls post_report
         self.message_id = message_id
         self.docs = docs
         self.sandbox = sandbox
@@ -230,7 +234,12 @@ class ToolBox:
         self.access = FolderAccess(agent.filesystem, protected, extra_file_types, skill_folders=folders)
 
     def specs(self) -> list[dict[str, Any]]:
-        return [*TOOL_SPECS, USE_SKILL_SPEC] if self.skills.skills else TOOL_SPECS
+        specs = list(TOOL_SPECS)
+        if self.skills.skills:
+            specs.append(USE_SKILL_SPEC)
+        if self.run:
+            specs.append(POST_REPORT_SPEC)
+        return specs
 
     async def call(self, name: str, args: dict[str, Any], tool_call_id: int | None = None) -> ToolOutcome:
         try:
@@ -244,6 +253,9 @@ class ToolBox:
                 return await self._run_python(args, tool_call_id)
             if name == "use_skill" and self.skills.skills:
                 return self._use_skill(str(args.get("name") or ""))
+            if name == "post_report" and self.run:
+                self.report = parse_report(args)
+                return ToolOutcome("Report posted. The run is complete.", "Posted the report")
             return ToolOutcome(f"Unknown tool {name!r}.", f"Unknown tool {name}", ok=False)
         except (AccessDenied, UnsupportedDocument, FileNotFoundError, SandboxUnavailable, ValueError) as e:
             msg = str(e) if not isinstance(e, FileNotFoundError) else f"File not found: {e.filename or e}"
@@ -527,5 +539,6 @@ def _failed_summary(name: str, args: dict[str, Any]) -> str:
         "search_document": "Search",
         "run_python": "Run",
         "use_skill": "Use skill",
+        "post_report": "Post the report",
     }
     return f"{label.get(name, name)} {Path(str(target)).name if 'path' in args else target}".strip()

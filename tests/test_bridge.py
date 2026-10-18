@@ -82,6 +82,13 @@ def env(tmp_path):
     store.close()
 
 
+def wait_until(condition, timeout=15):
+    deadline = time.time() + timeout
+    while time.time() < deadline and not condition():
+        time.sleep(0.05)
+    assert condition(), "timed out"
+
+
 def ok(res):
     assert res["ok"], res
     return res["data"]
@@ -145,18 +152,17 @@ def test_send_message_streams_dummy_reply(env):
     api, delivered = env
     ok(api.save_agent({"name": "Chatty"}))
     sent = ok(api.send_message("chatty", "hello there"))
-    assert sent["agent_message"]["status"] == "streaming"
-    assert api.send_message("chatty", "again")["ok"] is False  # still responding
+    assert sent["agent_message"]["status"] == "queued"  # until the agent's queue starts it
+    again = ok(api.send_message("chatty", "again"))  # while it's busy: waits its turn instead of failing
 
-    deadline = time.time() + 15
-    while time.time() < deadline and not any(e["type"] == "message.done" for e in delivered):
-        time.sleep(0.05)
-    done = next(e for e in delivered if e["type"] == "message.done")
-    streamed = "".join(e["delta"] for e in delivered if e["type"] == "message.delta")
-    assert done["message"]["status"] == "done"
-    assert done["message"]["content"] == streamed
-    assert "hello there" in streamed
-    assert [e["status"] for e in delivered if e["type"] == "agent.status"] == ["responding", "idle"]
+    wait_until(lambda: sum(e["type"] == "message.done" for e in delivered) == 2)
+    done = [e["message"] for e in delivered if e["type"] == "message.done"]
+    assert [m["id"] for m in done] == [sent["agent_message"]["id"], again["agent_message"]["id"]]  # in order
+    first_deltas = "".join(e["delta"] for e in delivered if e.get("message_id") == done[0]["id"])
+    assert done[0]["status"] == "done" and done[0]["content"] == first_deltas and "hello there" in first_deltas
+    started = [e["message"]["id"] for e in delivered if e["type"] == "message.started"]
+    assert started == [m["id"] for m in done]
+    assert [e["status"] for e in delivered if e["type"] == "agent.status"] == ["responding", "idle"] * 2
 
 
 def test_send_message_validation(env):
@@ -289,11 +295,11 @@ def test_discard_with_feedback_tells_the_agent(env, tmp_path):
     assert res["change"]["status"] == "discarded"
     assert res["user_message"]["content"].endswith("Use 'Late' instead of 'Delayed'.")
     assert "tracker.csv" in res["user_message"]["content"]
-    assert res["agent_message"]["status"] == "streaming"
-    # While the agent replies, more feedback is refused (and nothing is discarded by the failed call).
+    assert res["agent_message"]["status"] == "queued"
+    # More feedback while the agent is replying waits in its queue.
     another = _pending_change(api, tmp_path, "editor")
-    assert api.discard_change(another["id"], "more")["ok"] is False
-    assert api._changes.get(another["id"])["status"] == "pending"
+    assert ok(api.discard_change(another["id"], "more"))["agent_message"]["status"] == "queued"
+    assert api._changes.get(another["id"])["status"] == "discarded"
 
 
 def test_clone_names():
@@ -410,9 +416,7 @@ def test_discard_feedback_keeps_agent_in_activity_until_reply_finishes(env, tmp_
     change = _pending_change(api, tmp_path, "editor")
     ok(api.discard_change(change["id"], "Use Late instead."))
     assert [e["revising"] for e in api._changes.attention()] == [True]
-    deadline = time.time() + 15
-    while time.time() < deadline and "editor" in api._busy:
-        time.sleep(0.05)
+    wait_until(lambda: not api._dispatch.busy("editor"))
     time.sleep(0.1)
     assert api._changes.attention() == []
     assert any(e["type"] == "attention.updated" for e in delivered)

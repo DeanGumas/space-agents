@@ -47,7 +47,24 @@ Local UI state (form drafts, open/closed toggles) uses `useState`.
 **Agent replies** render, in order: activity steps (`tool_calls`), the Markdown answer, and change cards
 (`changes`). Both lists come with `list_messages` and are kept live by the `tool.started`/`tool.done` and
 `change.updated` events. Besides tool calls, the steps include `compact_context` ("Summarized earlier work…") when
-a long run was compacted. While an agent is responding, the composer's Send button becomes **Stop**.
+a long run was compacted.
+
+**Agent status and the queue.** `agent.status` is `idle`, `responding` (a chat reply), or `running` (a run). While
+the agent is busy, the composer shows **Stop** next to Send. Stop cancels the current work and anything queued.
+Sending still works: the reply shows "Waiting for … to finish its current work…" (status `queued`) until the
+agent's queue gets to it, and `message.started` switches it to streaming.
+
+**Schedules.** A scheduled agent shows a "Next run 10:07" / "Next run tomorrow 07:02" chip in the channel header
+(`nextRunLabel` in `lib/util.js`), and a clock in its sidebar row with the same tooltip. Both come from
+`next_run_at` in the agent view and update on `agent.schedule` events. The schedule itself is edited in the
+editor's Schedule tab. Scheduled runs show a "Scheduled run" chip on their report.
+
+**Runs.** **Run now** in the channel header (`runAgent()` → `run_agent`) is disabled, with a tooltip, until the
+agent has a task and a model is configured.
+- **While it works:** the run's message shows a "Run" chip and its activity steps.
+- **When done:** it renders `RunReport` (`components/Report.js`), with a summary, then findings by level (urgent /
+  action needed / info) with suggested actions and source chips.
+- **Sanitizing:** item details are model output and go through `renderMarkdown`.
 
 The **agent editor** edits a draft copy and saves through `saveAgent()`. A failed save puts `ApiError.fields` into
 the editor's `errors` and jumps to the first tab with an error. Closing with unsaved changes asks for confirmation.

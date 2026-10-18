@@ -435,3 +435,91 @@ async def test_no_skill_tool_when_skills_are_off(env, tmp_path):
     await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Hello")
     assert "use_skill" not in [t["function"]["name"] for t in client.requests[0]["tools"]]
     assert "## Skills" not in client.requests[0]["messages"][0]["content"]
+
+
+async def do_run(env, runner, task="Check the folder for supplier updates and report delays."):
+    store, *_, agent, _ = env
+    agent.task = task
+    agent.model.name = "test-model"
+    run = store.add_run(agent.id, "manual", task)
+    await runner.run(agent, store.get_run(run["id"]))
+    return store.get_run(run["id"]), store.get_message(run["message_id"])
+
+
+def post_report(**report):
+    return ChatResult(tool_calls=[ToolCall(id="r1", name="post_report", arguments=json.dumps(report))])
+
+
+async def test_a_run_does_the_task_and_ends_with_its_report(env, tmp_path):
+    store, events, *_ = env
+    store.add_message("po-bot", "user", "an old chat message")  # runs start fresh: not in the run's context
+    client = ScriptedClient(
+        [
+            ChatResult(tool_calls=[call("read_document", path="Acme Supplier Update.pdf")]),
+            post_report(
+                summary="1 supplier delay",
+                items=[
+                    {"level": "action", "title": "PO 45821 slips to Oct 14", "sources": ["Acme Supplier Update.pdf"]}
+                ],
+            ),
+        ]
+    )
+    run, message = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    assert len(client.requests) == 2  # post_report ends the run: no extra model call
+    first = client.requests[0]
+    assert [m["role"] for m in first["messages"]] == ["system", "user"]
+    assert "This is a run, not a chat" in first["messages"][0]["content"]
+    assert first["messages"][1]["content"].endswith("Check the folder for supplier updates and report delays.")
+    assert "post_report" in [t["function"]["name"] for t in first["tools"]]
+
+    assert run["status"] == "done" and run["report"]["items"][0]["level"] == "action"
+    assert message["status"] == "done" and message["content"].startswith("**1 supplier delay**")
+    assert [e["status"] for e in events.of("agent.status")] == ["running", "idle"]
+    assert events.of("message.done")[-1]["message"]["run"]["status"] == "done"
+
+
+async def test_a_run_answering_in_text_is_nudged_once_to_post_its_report(env, tmp_path):
+    client = ScriptedClient([ChatResult(content="All quiet: nothing new."), post_report(summary="Nothing new")])
+    run, _ = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    nudge = client.requests[1]
+    assert [t["function"]["name"] for t in nudge["tools"]] == ["post_report"]
+    assert "call post_report" in nudge["messages"][-1]["content"]
+    assert run["report"]["summary"] == "Nothing new"
+
+
+async def test_a_run_that_never_posts_a_report_still_gets_one(env, tmp_path):
+    text = "Summary: Nothing new in the folder today. Checked 6 files."
+    client = ScriptedClient([ChatResult(content=text), ChatResult(content="Still nothing new.")])
+    run, _ = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    assert len(client.requests) == 2  # one nudge only
+    assert run["report"]["summary"] == "Nothing new in the folder today."
+    assert run["report"]["items"][0]["level"] == "info"
+
+
+async def test_out_of_tool_budget_a_run_can_still_post_its_report(env, tmp_path):
+    *_, agent, _ = env
+    agent.limits.max_tool_calls = 1
+    client = ScriptedClient(
+        [
+            ChatResult(tool_calls=[call("read_document", path="Acme Supplier Update.pdf")]),
+            post_report(summary="Read the update; 1 delay"),
+        ]
+    )
+    run, _ = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    assert [t["function"]["name"] for t in client.requests[1]["tools"]] == ["post_report"]
+    assert "Call post_report now" in client.requests[1]["messages"][-1]["content"]
+    assert run["report"]["summary"] == "Read the update; 1 delay"
+
+
+async def test_failed_run_and_chat_after_a_run(env, tmp_path):
+    store, *_, agent, _ = env
+    run, message = await do_run(env, make_runner(env, ScriptedClient([LLMError("server down")]), FakeSandbox(tmp_path)))
+    assert run["status"] == "error" and run["report"] is None and "server down" in message["content"]
+
+    ok_client = ScriptedClient([post_report(summary="All quiet")])
+    await do_run(env, make_runner(env, ok_client, FakeSandbox(tmp_path)))
+    chat_client = ScriptedClient([ChatResult(content="It said all quiet.")])
+    await ask(env, make_runner(env, chat_client, FakeSandbox(tmp_path)), "What did the run find?")
+    history = chat_client.requests[0]["messages"]
+    assert any(m["content"].startswith("[Report from a run of your task]\n**All quiet**") for m in history)
+    assert "post_report" not in [t["function"]["name"] for t in chat_client.requests[0]["tools"]]  # chats don't

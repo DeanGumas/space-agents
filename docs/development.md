@@ -56,6 +56,11 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
   Token usage per run is logged ("Usage for …").
 - **Smoke test:** launches the actual pywebview window, waits for the UI to report ready, checks the DOM rendered and
   no JS errors occurred, then exits. Use it in CI on Windows and macOS runners.
+- **Scheduler tests** (`tests/test_scheduler.py`) drive `Scheduler.tick()` with a fake clock around a known Monday
+  (`Clock`), so slots, jitter, catch-up, and skips are tested without waiting.
+- **Work-queue tests** (`tests/test_dispatch.py`) run the real `Dispatcher` on a real core loop with a `GatedRunner`
+  that holds each job until the test releases it, so ordering, parallelism, and Stop are tested without timing
+  guesses. `tests/test_reports.py` covers `post_report` validation and the fallback.
 - **Agent-loop tests** (`tests/test_loop.py`) use a scripted model (`ScriptedClient`) and a fake sandbox, so tool
   flows are tested without network or a webview. `tests/conftest.py` provides the `sample_docs` fixture.
 - **`tests/test_ui.py`** catches the common front-end breakages without a browser: CSP hash drift, missing vendored
@@ -80,6 +85,8 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 | Allow a new sandbox package | See "Third-party front-end assets" above (`PYODIDE` in `scripts/vendor.py`) |
 | Add a skill to test with | Make a folder with `<skill>/SKILL.md` (`---` header with `name` and `description`), then Instructions → Skills → Enable and pick it (agents.md) |
 | Let agents save another file type | `SPACE_AGENTS_EXTRA_FILE_TYPES=.py,.cpp` in `.env`; launchers like `.exe` stay blocked (`NEVER_FILE_TYPES` in `tools/access.py`) |
+| Try a schedule | Edit → Schedule → Run automatically, "Every 5 minutes", and active hours covering now. The header shows "Next run …" (up to ±5 minutes off the scheduled time; set `SPACE_AGENTS_SCHEDULE_JITTER_MINUTES=0` to test exact times). Leave the app open; each run posts a report card. The log shows "Scheduled run of <agent> (on time)" |
+| Try a run | Give an agent a task (Edit → Schedule; the schedule can stay off) and a folder, e.g. `dev/sample-docs` with "Compare the supplier updates with PO Tracker.xlsx and report POs that need attention". Click **Run now**. Send a chat message meanwhile to see it queue |
 | Test compaction without a huge document | Set the agent's "Summarize at" low (min 8,000) and have it read a few long files. The step appears as "Summarized earlier work…" |
 | Test a live model cheaply | `gpt-5-nano` with `SPACE_AGENTS_REASONING_EFFORT=low`; a document task is ~10–40k tokens. Check "Usage for" in the log |
 
@@ -108,5 +115,8 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 - **A skill doesn't show up:** the editor's Skills section lists problems. Usually a `SKILL.md` has no
   `description`, or two skills share a name. On macOS, hidden folders like `~/.claude/skills` need ⌘⇧. in the
   picker.
+- **A scheduled agent didn't run:** the app must be open and the computer awake. The log says why a slot was
+  skipped: "Skipping missed run" (back after the slot, and either outside active hours or catch-up off),
+  "previous one is still going", or "no model is configured". Runs beyond `max_concurrent_runs` wait as "queued".
 - **macOS log noise like `NSWindow warning: adding an unknown subview: <WKInspectorWKWebView>`:** harmless. It
   appears when the web inspector opens.

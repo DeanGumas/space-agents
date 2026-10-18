@@ -131,15 +131,29 @@ export async function sendMessage(agentId, text) {
 }
 
 function addExchange(agentId, userMessage, agentMessage) {
-  const list = messages.value[agentId];
+  // The agent's status follows from its work queue (agent.status events): the reply may wait behind other work.
   batch(() => {
-    // Only extend a conversation that's already loaded; otherwise it loads in full when opened.
-    if (list) messages.value = { ...messages.value, [agentId]: [...list, userMessage, agentMessage] };
+    appendMessages(agentId, [userMessage, agentMessage]);
     patchAgent(agentId, {
-      status: "responding",
       last_message: { role: "user", preview: userMessage.content.slice(0, 160), created_at: userMessage.created_at },
     });
   });
+}
+
+function appendMessages(agentId, items) {
+  // Only extend a conversation that's already loaded; otherwise it loads in full when opened.
+  const list = messages.value[agentId];
+  if (list) messages.value = { ...messages.value, [agentId]: [...list, ...items] };
+}
+
+/** Run now: the agent does its task and posts a report card (queued if it's busy). */
+export async function runAgent(agentId) {
+  try {
+    const { message } = await call("run_agent", agentId);
+    appendMessages(agentId, [message]);
+  } catch (e) {
+    toastError(e);
+  }
 }
 
 function updateMessage(agentId, messageId, fn) {
@@ -154,6 +168,9 @@ function upsert(list = [], item) {
 
 function handleEvent(ev) {
   switch (ev.type) {
+    case "message.started": // a queued reply or run began (its status and run come along)
+      updateMessage(ev.agent_id, ev.message.id, (old) => ({ ...old, ...ev.message }));
+      break;
     case "message.delta":
       updateMessage(ev.agent_id, ev.message_id, (m) => ({ ...m, content: m.content + ev.delta }));
       break;
@@ -169,6 +186,9 @@ function handleEvent(ev) {
     }
     case "agent.status":
       patchAgent(ev.agent_id, { status: ev.status });
+      break;
+    case "agent.schedule": // the scheduler moved the agent's next run
+      patchAgent(ev.agent_id, { next_run_at: ev.next_run_at });
       break;
     case "tool.started":
     case "tool.done":

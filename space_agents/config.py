@@ -29,7 +29,7 @@ ENV_PREFIX = "SPACE_AGENTS_"
 @dataclass(frozen=True)
 class Spec:
     key: str
-    kind: str  # "url" | "bool" | "path" | "list" | "str" | "secret"
+    kind: str  # "url" | "bool" | "int" | "path" | "list" | "str" | "secret"
     label: str
     help: str
 
@@ -61,6 +61,20 @@ SPECS: tuple[Spec, ...] = (
         "bool",
         "Mark agent files",
         "Tag files agents save as downloaded from the internet: Office opens them in Protected View, blocks macros",
+    ),
+    Spec(
+        "schedule_jitter_minutes",
+        "int",
+        "Schedule jitter (minutes)",
+        "Scheduled runs start at a random time up to this many minutes before or after their scheduled time (0–30, "
+        "default 5). Lowering it may lead to slow responses, because many users' agents would then run at precisely "
+        "the same time (e.g. on the hour)",
+    ),
+    Spec(
+        "max_concurrent_runs",
+        "int",
+        "Runs at once",
+        "How many agent runs (scheduled or Run now) may work at the same time, across all agents (1–10)",
     ),
     Spec(
         "reasoning_effort",
@@ -107,6 +121,11 @@ def find_dotenv() -> Path | None:
 
 
 def _coerce(spec: Spec, raw: Any, base_dir: Path | None) -> Any:
+    if spec.kind == "int":
+        try:
+            return int(str(raw).strip())
+        except ValueError:
+            return None  # the property supplies the default
     if spec.kind == "bool":
         if isinstance(raw, bool):
             return raw
@@ -187,6 +206,16 @@ class Config:
     def mark_agent_files(self) -> bool:
         return self.get("mark_agent_files")
 
+    @property
+    def schedule_jitter_minutes(self) -> int:
+        value = self.get("schedule_jitter_minutes")
+        return max(0, min(30, value)) if isinstance(value, int) else 5
+
+    @property
+    def max_concurrent_runs(self) -> int:
+        value = self.get("max_concurrent_runs")
+        return max(1, min(10, value)) if isinstance(value, int) else 2
+
     def describe(self) -> list[dict[str, Any]]:
         """For the Settings UI: every value with its label, source, and whether the user may edit it."""
         out = []
@@ -230,6 +259,8 @@ def load_config(
     defaults.setdefault("sandbox_warmup", "full")
     defaults.setdefault("extra_file_types", [])
     defaults.setdefault("mark_agent_files", True)
+    defaults.setdefault("max_concurrent_runs", 2)
+    defaults.setdefault("schedule_jitter_minutes", 5)
 
     if dotenv_path is True:
         dotenv_path = find_dotenv()

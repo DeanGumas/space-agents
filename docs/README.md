@@ -24,6 +24,8 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - a resizable sidebar and a right-click menu (Edit, Duplicate)
   - skills: a folder of SKILL.md skills per agent ([agents.md](agents.md))
   - compaction of long runs ([architecture.md](architecture.md))
+  - **Run now** with report cards, and a work queue per agent ([architecture.md](architecture.md))
+  - scheduled runs: slots with jitter, catch-up after sleep, and a global run cap
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
 - **Security hardening:**
@@ -34,7 +36,8 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - MCP/OpenAPI servers
   - attachments (drag-and-drop)
   - onboarding and keychain
-  - scheduled runs
+  - memory between runs, report notifications, and background running (Phase 3 steps c–e)
+  - rooms (group chats; designed in PLAN.md §3.5)
   - the "Allow writing to this folder?" permission card
 
 Keep these docs current: when a change alters how pieces connect, update the matching doc in the same change.

@@ -39,6 +39,8 @@ current value comes from `default` or `user`; a value from `.env`/env/CLI would 
 | `reasoning_effort` | `SPACE_AGENTS_REASONING_EFFORT` | str | Default `low`; bounds reasoning tokens; dropped if a model rejects it |
 | `extra_file_types` | `SPACE_AGENTS_EXTRA_FILE_TYPES` | list | File types agents may save on top of the safe defaults, e.g. `.py,.cpp`. Program launchers are never allowed (see documents-and-sandbox.md) |
 | `mark_agent_files` | `SPACE_AGENTS_MARK_AGENT_FILES` | bool | Default on: tag files agents save as downloaded from the internet (Protected View in Office) |
+| `schedule_jitter_minutes` | `SPACE_AGENTS_SCHEDULE_JITTER_MINUTES` | int | Default 5 (0–30). Scheduled runs start at a random time up to this many minutes before or after their scheduled time; each agent keeps its offset. **Lowering it may lead to slow responses, because many users' agents would then run at precisely the same time (e.g. on the hour)** |
+| `max_concurrent_runs` | `SPACE_AGENTS_MAX_CONCURRENT_RUNS` | int | Default 2 (1–10): how many runs (scheduled or Run now) may work at once across all agents; chat isn't capped |
 | `sandbox_warmup` | `SPACE_AGENTS_SANDBOX_WARMUP` | str | `full` (default) / `light` / `off`: preload the Python sandbox at launch (see documents-and-sandbox.md) |
 
 Behavior details:

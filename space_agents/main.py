@@ -20,7 +20,9 @@ from space_agents.config import Config, load_config
 from space_agents.core import Core, EventBus
 from space_agents.documents.library import DocumentLibrary
 from space_agents.platform.appearance import system_prefers_dark
+from space_agents.runtime.dispatch import Dispatcher
 from space_agents.runtime.loop import AgentRunner
+from space_agents.runtime.scheduler import Scheduler
 from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.server import make_app
 from space_agents.settings import UserSettings
@@ -114,6 +116,25 @@ def run(argv: list[str] | None = None) -> int:
         exit_code["value"] = 1
         on_ui_ready = _sandbox_selftest(core, sandbox, exit_code)
 
+    dispatcher = Dispatcher(
+        store=store,
+        core=core,
+        events=events,
+        runner=runner,
+        changes=changes,
+        max_concurrent_runs=config.max_concurrent_runs,
+    )
+    scheduler = Scheduler(
+        store=store,
+        events=events,
+        start_run=lambda agent, catch_up: dispatcher.run(agent, "schedule", catch_up=catch_up),
+        has_scheduled_run=lambda agent_id: dispatcher.has_run(agent_id, "schedule"),
+        can_run=lambda: runner.config.llm_ready,
+        jitter_minutes=config.schedule_jitter_minutes,
+    )
+    if not (args.smoke_test or args.sandbox_selftest):
+        core.submit(scheduler.run_forever())
+
     api = Api(
         config=config,
         reload_config=lambda: load_config(cli=cli),
@@ -125,6 +146,8 @@ def run(argv: list[str] | None = None) -> int:
         runner=runner,
         changes=changes,
         on_ui_ready=on_ui_ready,
+        dispatcher=dispatcher,
+        scheduler=scheduler,
     )
     window = webview.create_window(
         "Space Agents",

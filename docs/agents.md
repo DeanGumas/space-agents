@@ -17,7 +17,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `mcp_servers[]` | `{id, tools: "read_only" \| [names]}`. The document server is implicit and not listed | Data sources |
 | `filesystem[]` | `{path, access: "read" \| "read_write"}`. Paths under home are stored as `~/…` | Files & folders |
 | `file_changes` | `new_files: allow\|ask`, `existing_files: ask\|allow_with_backup` (see documents-and-sandbox.md) | Files & folders |
-| `schedule`, `task` | When to run and what to do each run (task required if the schedule is on) | Schedule |
+| `schedule`, `task` | When to run and what to do each run (task required if the schedule is on). With the schedule on, it runs at fixed times on the chosen days within the active hours (e.g. 07:03, 08:03, …: every N minutes from the start time, plus the agent's own random offset of up to ±5 minutes, see `schedule_jitter_minutes`) while the app is open; a missed run catches up once if "Catch up after a missed run" is on. **Run now** in the channel header runs the task immediately. Either way the result is a report card (architecture.md) | Schedule |
 | `notifications` | `desktop`: pop up when the agent needs approval (and, later, when a scheduled run finds something); `min_level` for runs (`info` / `action` / `urgent`) | Schedule |
 | `compaction` | `enabled`, `trigger_tokens` (8k–2M, default 100k), `summary_tokens` (200–20k, default 2k, at most a quarter of the trigger): summarize earlier work when a run gets long (architecture.md) | Model → Long tasks |
 | `memory`, `limits` | Notes between runs; per-run tool-call and time caps | Advanced |

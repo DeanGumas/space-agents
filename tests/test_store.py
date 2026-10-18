@@ -95,3 +95,33 @@ def test_migrations_are_idempotent(tmp_path):
     s = Store(tmp_path)
     assert s._db.execute("PRAGMA user_version").fetchone()[0] == len(SCHEMA)
     s.close()
+
+
+def test_v3_migration_keeps_messages_and_adds_runs(tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "space.db", isolation_level=None)
+    for i, script in enumerate(SCHEMA[:2], start=1):  # a database from before runs existed
+        db.executescript(f"BEGIN; {script}; PRAGMA user_version = {i}; COMMIT;")
+    db.execute(
+        "INSERT INTO messages (agent_id, role, content, status, created_at) VALUES ('a', 'user', 'hi', 'done', 'x')"
+    )
+    db.close()
+
+    s = Store(tmp_path)
+    assert s.get_message(1)["content"] == "hi" and s.get_message(1)["run_id"] is None
+    queued = s.add_message("a", "agent", "", status="queued")
+    assert queued["id"] == 2 and queued["status"] == "queued"
+    run = s.add_run("a", "manual", "Check the folder.")
+    assert run["status"] == "queued" and s.get_message(run["message_id"])["run_id"] == run["id"]
+    s.close()
+
+
+def test_runs_and_interrupted_work(store):
+    run = store.add_run("a", "schedule", "Do the task.")
+    store.update_run(run["id"], status="running", report={"summary": "ok", "items": []})
+    assert store.get_run(run["id"])["report"] == {"summary": "ok", "items": []}
+    [message] = store.attach_runs([store.get_message(run["message_id"])])
+    assert message["run"]["trigger"] == "schedule"
+    store.recover_interrupted()
+    assert store.get_run(run["id"])["status"] == "error" and store.get_message(run["message_id"])["status"] == "error"

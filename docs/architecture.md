@@ -14,7 +14,8 @@ SpaceAgents (python)
 ├── pywebview workers ─ one short-lived thread per JS → Python call (bridge.Api methods)
 └── "space-core" ────── asyncio loop (core.Core)
                          ├── EventBus flusher: batches events to the UI every ~50 ms
-                         └── agent runs (runtime/loop.py), LLM client, sandbox orchestration
+                         ├── scheduler: a 30 s tick that queues scheduled runs (runtime/scheduler.py)
+                         └── per-agent work queues → agent runs (runtime/loop.py), LLM client, sandbox orchestration
 document extraction ──── one dedicated thread (pypdfium2 isn't thread-safe)
 ```
 
@@ -39,8 +40,10 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 | Event | Payload | Effect in UI |
 |---|---|---|
 | `message.delta` | `agent_id, message_id, delta` | Append text to a streaming message |
-| `message.done` | `agent_id, message` | Replace with the final message; bump unread if not viewing |
-| `agent.status` | `agent_id, status` (`idle`/`responding`) | Status dot, "Responding" chip, Stop button |
+| `message.started` | `agent_id, message` | A queued reply or run began: its status (and run) update |
+| `message.done` | `agent_id, message` | Replace with the final message (with `run` for reports); bump unread if not viewing |
+| `agent.status` | `agent_id, status` (`idle`/`responding`/`running`) | Status dot, "Responding"/"Running its task" chip, Stop button |
+| `agent.schedule` | `agent_id, next_run_at` (local time, or null) | "Next run 10:07" chip and the sidebar clock |
 | `tool.started` / `tool.done` | `agent_id, message_id, call` | Activity step (spinner → done/failed); also used for `compact_context` |
 | `change.updated` | `agent_id, message_id, change` | Proposed-change card (pending/applied/…) |
 | `attention.updated` | `attention` (full list) | Activity entries and the sidebar's Activity badge |
@@ -48,8 +51,10 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 ## Request flow: sending a chat message
 
 1. The Composer calls `sendMessage()`, which calls `call("send_message", id, text)`.
-2. `Api.send_message` validates the text, stores the user message, and stores an empty agent message with status
-   `streaming`. It marks the agent busy, submits the reply to the core loop, and returns both messages immediately.
+2. `Api.send_message` validates the text and hands it to the agent's work queue (`Dispatcher.chat`,
+   `runtime/dispatch.py`). The queue stores the user message and an empty agent reply with status `queued`, and
+   returns both right away. If the agent is busy, the reply waits its turn ("Waiting for … to finish…"). When it
+   starts, it becomes `streaming` and `message.started` is emitted.
 3. With a model configured (`llm_base_url` + `api_key`), `AgentRunner.chat` (`runtime/loop.py`):
    1. loads the agent's skills, if enabled (re-read every run), and builds the system prompt and history
    2. compacts the conversation first if it's over the agent's threshold (see "Long runs" below)
@@ -58,7 +63,57 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
    5. saves the final text and token usage (`message.done`)
 
    Without a model, `runtime/dummy.py` streams a placeholder.
-4. "Stop" cancels the run's future; the message is saved as stopped.
+4. "Stop" cancels what the agent is doing and everything queued for it. Queued replies end as "Stopped before it
+   started."
+
+**The work queue.** Each agent has one FIFO queue (an `asyncio.Lock` per agent on the core loop) shared by chat
+replies, runs, and later room turns. Different agents work in parallel. A job reads the agent's manifest when it
+starts, not when it was queued. Job state (started, cancelled, finished) changes only on the core loop, so Stop can't
+race a job that's starting. After any job that ran, the bridge's `_after_work` checks for pending changes to notify
+about.
+
+## Request flow: a run (Run now or scheduled)
+
+1. **Starting a run:**
+   - **Run now:** the channel header calls `run_agent(id)`. It needs a task (Edit → Schedule) and a configured
+     model.
+   - **Scheduled:** the scheduler's tick finds the agent's slot due (see "Scheduling" below) and calls
+     `Dispatcher.run(agent, "schedule")`.
+2. `Dispatcher.run` creates a `runs` row (`trigger: manual` or `schedule`) and its report message (`queued`, with
+   `run_id`), then queues the job.
+   - **Shared cap:** runs share a global cap (`max_concurrent_runs`, default 2).
+   - **Catch-ups:** catch-up runs (`catch_up=True`) also take turns one at a time across agents, before taking a
+     slot.
+   - **Waiting:** a run waiting for its turn stays `queued` and keeps its place in its agent's line.
+3. `AgentRunner.run` (`runtime/loop.py`) uses a fresh context: the system prompt with "This is a run, not a chat",
+   then the task. `post_report` is among its tools.
+4. The run ends when the model calls `post_report` (`runtime/reports.py`):
+   - **If it answers in text instead,** it gets one nudge with only `post_report` on offer. If that fails too, the
+     text becomes the report.
+   - **Saving:** the report is saved on the run, and its Markdown becomes the message content.
+   - **UI:** `message.done` carries the run, so the UI renders a report card.
+5. File changes follow the agent's `file_changes` policy, as in chat.
+
+**Scheduling (`runtime/scheduler.py`).** `main.py` starts `Scheduler.run_forever()` on the core loop. It isn't
+started in `--smoke-test`/`--sandbox-selftest`. The first tick comes 15 s after launch, then one every 30 s.
+
+- **Slots:** each scheduled agent has fixed scheduled times on its active days inside its active hours: start, then
+  every N minutes. It runs at those times plus its own jitter.
+- **Jitter:** a random offset of up to ±`schedule_jitter_minutes` (default 5), drawn once per agent and saved in
+  `schedule_state.jitter_seconds`. It's random, not derived from the agent id, because agents made from the same
+  template share an id across machines.
+- **Saved progress:** the next slot is stored in `schedule_state` with a key of the schedule's settings. Editing
+  the schedule recomputes it.
+- **Each tick** compares the wall clock with `next_run_at`:
+  - **Due within 3 minutes:** run.
+  - **Older** (sleep, app closed): run once, as a *catch-up*, if catch-up is on and it's within active hours now.
+    Otherwise wait for the next normal time. Only one upcoming time is stored per agent, so days away still means
+    one run.
+  - **Skipped:** while the agent's previous scheduled run is still queued or running, or when no model is
+    configured.
+  - **Always:** move to the next slot after now and emit `agent.schedule`.
+- **For the UI:** the bridge adds `next_run_at` to each agent view via `Scheduler.next_run`, which works even
+  before the first tick.
 
 **Long runs (compaction, `runtime/compaction.py`).** Every model call resends the run so far, so a run that reads
 many documents can outgrow the model's context window. Before each call, the loop measures the run's size: the
@@ -110,7 +165,8 @@ changes.
 |---|---|
 | Lifecycle | `ping`, `ui_ready`, `bootstrap` |
 | Agents | `list_agents`, `save_agent`, `duplicate_agent`, `delete_agent` |
-| Chat | `list_messages` (with tool calls and changes), `send_message`, `stop_agent` |
+| Chat | `list_messages` (with tool calls, changes, and runs), `send_message` (queued if busy), `stop_agent` (current + queued) |
+| Runs | `run_agent` (Run now); agent views include `next_run_at` |
 | Skills | `list_skills(folder)` (editor preview; only for picked folders or folders agents already use) |
 | Activity | `attention` (also in `bootstrap`), `set_ui_state(focused, viewing)` (window focus + open conversation, for notifications) |
 | Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
@@ -154,7 +210,9 @@ space_agents/
   defaults.json  build-time defaults (org URLs get baked in here)
   server.py      WSGI app: UI files, sandbox worker CSP header, token-scoped workspace routes
   llm/client.py  OpenAI-compatible chat (streaming, tools, param-compat, retries)
-  runtime/       loop.py (agent loop), prompts.py, dummy.py (no-model placeholder)
+  runtime/       loop.py (agent loop: chat + runs), dispatch.py (per-agent work queue + run cap),
+                 scheduler.py (slots, 30 s tick, catch-up), reports.py (post_report),
+                 compaction.py, prompts.py, dummy.py (no-model placeholder)
   tools/         registry.py (tool specs + execution), access.py (folder policy)
   documents/     extract.py (PDF/Office/text → pages), library.py (cache + FTS5 search)
   sandbox/       pyodide.py (host side), selftest.py (--sandbox-selftest)
@@ -176,14 +234,18 @@ scripts/update_csp.py        keep the CSP hash in sync with the import map
 - **Manifests and settings** are written atomically (temp file + `os.replace`).
 - **SQLite** runs in WAL mode behind a single lock-guarded connection. Schema migrations are a list in `store.py`,
   applied in order using `PRAGMA user_version`.
-- **On startup**, messages left `streaming` (crash or quit mid-reply) are marked `error`. Leftover sandbox
-  `workspaces/` are deleted, and file history older than 30 days is pruned.
+- **On startup**, messages left `streaming` or `queued` (crash or quit mid-reply) are marked `error`, and so are
+  runs left `queued`/`running`. Leftover sandbox `workspaces/` are deleted, and file history older than 30 days is
+  pruned.
+- **Schema v3** rebuilds `messages` (SQLite can't change a CHECK constraint in place) with ids kept, and adds `runs`.
 - **Proposed changes** are applied with a hash check, a snapshot of the previous version, and a temp file +
   `os.replace`, so a crash can't leave a half-written user file.
 
 | Table | Contents |
 |---|---|
-| `messages` | Chat history (+ token usage per agent reply) |
+| `messages` | Chat history (+ token usage per agent reply); status `queued`/`streaming`/`done`/`error`; `run_id` for run reports |
+| `runs` | Runs of an agent's task: trigger (`manual`/`schedule`), status, task, report JSON, timestamps |
+| `schedule_state` | Per scheduled agent: `next_run_at`, `last_run_at`, its `jitter_seconds`, and the settings they were computed for |
 | `tool_calls` | Every tool call: name, arguments, summary, truncated result, status, duration (the audit trail) |
 | `changes` | Proposed changes and their status |
 | `file_versions` | Previous versions of overwritten files (blobs in `history/`) |

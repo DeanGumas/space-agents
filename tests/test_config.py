@@ -103,3 +103,16 @@ def test_file_safety_settings(tmp_path):
     cfg = load_config(environ=env, dotenv_path=False, cli={"data_dir": tmp_path})
     assert cfg.extra_file_types == [".py", ".cpp"] and cfg.mark_agent_files is False
     assert {"extra_file_types", "mark_agent_files"}.isdisjoint(c["key"] for c in cfg.describe() if c["editable"])
+
+
+def test_schedule_jitter_setting(tmp_path):
+    assert load_config(environ={}, dotenv_path=False, cli={"data_dir": tmp_path}).schedule_jitter_minutes == 5
+    env = {"SPACE_AGENTS_SCHEDULE_JITTER_MINUTES": "0", "SPACE_AGENTS_MAX_CONCURRENT_RUNS": "3"}
+    cfg = load_config(environ=env, dotenv_path=False, cli={"data_dir": tmp_path})
+    assert cfg.schedule_jitter_minutes == 0 and cfg.max_concurrent_runs == 3
+    high = load_config(
+        environ={"SPACE_AGENTS_SCHEDULE_JITTER_MINUTES": "90"}, dotenv_path=False, cli={"data_dir": tmp_path}
+    )
+    assert high.schedule_jitter_minutes == 30
+    help_text = next(c["help"] for c in cfg.describe() if c["key"] == "schedule_jitter_minutes")
+    assert "slow responses" in help_text

@@ -128,8 +128,9 @@ SpaceAgents/
   attachments/<sha256>/  # (planned) snapshots of files the user dropped into chat
   logs/                  # only when the data dir is overridden (dev); otherwise the OS log folder
   space.db               # SQLite. Built: messages (+ token usage), tool_calls (audit), changes, file_versions,
-                         #   doc_cache + doc_pages + doc_fts (FTS5). Planned: attachments, runs, notifications,
-                         #   agent_memory
+                         #   doc_cache + doc_pages + doc_fts (FTS5), runs, schedule_state. Planned: attachments,
+                         #   notifications,
+                         #   agent_memory, rooms
 ```
 
 The API key will be stored in the OS keychain under service `SpaceAgents`. During development it comes from
@@ -371,7 +372,8 @@ The model sees a few clear, task-shaped tools. Users see plain-language activity
 | Writing | `append_rows`, `create_document`, … | deferred | Structured writers. With the guardrails in §2.9, `run_python` handled spreadsheet edits reliably even with gpt-5-nano; revisit if needed |
 | Org servers | whatever the selected MCP/OpenAPI servers expose | planned (Phase 2a) | Read-only tools only by default (§4). Includes the GPU document server's `convert_document` |
 | Skills | `use_skill(name)` | ✅ built | Only when the agent has skills enabled (`skills.py`). Each skill is a folder with a `SKILL.md` (YAML header: `name`, `description`). Names and descriptions go in the system prompt; `use_skill` returns the instructions and the skill's file list, and the model reads those with the normal tools. Skill folders are read-only for agents. Python scripts can run in the sandbox; shell and Node scripts can't. Live-tested with gpt-5-nano, which picked the skill and followed its template |
-| Built-in | `post_report`, `remember`, `recall`, `current_time` | planned (Phase 3) | `post_report` is how a scheduled run delivers its result |
+| Runs | `post_report(summary, items)` | ✅ built | Only in runs; ends the run. How a run (Run now or scheduled) delivers its result (§3.2 step 5) |
+| Built-in | `remember`, `recall`, `current_time` | planned (Phase 3) | Memory between runs (§3.4) |
 
 - **Errors are results, not crashes.** Tool errors (access denied, unsupported file, code failure, even an unexpected
   bug) go back to the model as the tool's result, so it can correct itself or explain.
@@ -659,15 +661,21 @@ Steps:
    append results, and loop.
 4. **Stop** when the model answers without tool calls, or when `max_tool_calls` / `max_minutes` is hit (the agent is
    then asked for a final answer with no tools).
-5. **Scheduled runs** must end with `post_report`:
+5. ✅ **Runs** (scheduled or Run now) end with `post_report` (`runtime/reports.py`):
    ```json
    { "summary": "3 POs delivered, 1 supplier delay",
      "items": [ { "level": "action", "title": "PO 45821 ship date slipped", "detail": "...",
                   "suggested_actions": ["Notify program lead", "Check alternate supplier"],
                   "sources": ["outlook:msg/AAMk...", "costpoint:po/45821"] } ] }
    ```
-   A tool call is more reliable across local models than JSON mode. If the model doesn't call it, its final text is
-   wrapped as a single `info` item.
+   A tool call is more reliable across local models than JSON mode.
+   - **Ending the run:** `post_report` ends the run, with no extra model call. It's offered only in runs, and still
+     offered after the tool budget is used up.
+   - **If the model answers in text instead** (gpt-5-nano did, live): it gets one nudge with only `post_report` on
+     offer. That produced a structured report on the next live run. If it still doesn't call it, its text becomes a
+     single `info` item, headlined by the first sentence.
+   - **Storage:** the report is stored on the run, and its Markdown form is the message content, used for history,
+     previews, and the sidebar.
 6. ✅ **Context management (compaction),** per agent (`compaction` in the manifest, Model tab → Long tasks):
    - **When:** before each model call, the run's size is the model's own `prompt_tokens` from the last call plus a
      chars/4 estimate of what was added since. Past `trigger_tokens` (default 100k), the run is compacted.
@@ -685,15 +693,109 @@ Steps:
 ### 3.3 Chat vs. scheduled runs
 
 - **Chat:** the user messages the agent in its channel. Same loop, same tools, with conversation history.
-- **Run:** triggered by the schedule or "Run now". Uses `task` as the prompt and produces a report card in the channel,
-  plus notifications for items at or above `min_level`. The user can reply to a report to ask follow-ups, and that
-  conversation has the report in context.
+- **Run:** triggered by the schedule or "Run now" (✅ built). Uses `task` as the prompt and produces a report card in
+  the channel, plus notifications for items at or above `min_level` (⬜ step d). The user can reply to a report to ask
+  follow-ups, and that conversation has the report in context (✅ marked "[Report from a run of your task]").
+  - **Fresh context:** a run starts from the system prompt plus a "This is a run, not a chat" section and the task;
+    no chat history. Recent run summaries are added in step c.
+  - **File changes** follow the agent's own `file_changes` policy, as in chat. Pending ones wait in Activity.
+- ✅ **One work queue per agent** (`runtime/dispatch.py`). Chat replies and runs (and later room turns) take turns
+  per agent, in order; different agents work in parallel.
+  - **Busy agents:** a message sent while the agent is busy waits as *queued* ("Waiting for … to finish…") instead
+    of being refused.
+  - **Stop** cancels the current work and everything queued.
+  - **Fresh manifest:** each job reads the agent's manifest when it starts, so edits made while it waited apply.
+  - **Ordering:** job state changes only on the core loop, so a job can't be started and stopped at the same time
+    (a test caught that race).
 
 ### 3.4 Memory and deduplication
 
 - `remember(key, note)` / `recall(query)` give a small per-agent note store in SQLite (e.g. "Already notified about
   PO 45821 delay on 10/01"). Notes are visible and deletable in the agent's settings.
 - Recent run summaries are always injected, so agents naturally avoid repeating themselves.
+
+### 3.5 Rooms (group chats): planned (Phase 3b)
+
+**Goal.** A room is a place where several of the user's agents work together with the user, beyond the tasks set up
+in advance. Each agent brings its own data (folders, skills, and later MCP servers), so a room can connect findings
+nobody asked about. For example: PO Manager reports an Acme slip to Oct 14, Meeting Prep knows the program review is
+Thursday, and together that's a risk worth raising. Rooms are single-user: they're the user's own agents on the
+user's own machine.
+
+**Design.** We combine the two options considered: agents calling each other through a tool, and an orchestrator
+running every room. The core is a shared timeline where @mentions trigger replies, used the same way by the user and
+by agents. The orchestrator becomes an optional facilitator role on top of that core, not the engine underneath it.
+Agent-to-agent calls happen on the board where the user can see them, one turn at a time, not nested inside a tool
+call.
+
+**A room has:**
+- a **name** and a **theme**: the room's shared purpose, e.g. "Supply chain weekly: watch for schedule and cost
+  risk". Every member sees the theme, and it's what lets agents speak up beyond answering @mentions.
+- **members:** some of the user's agents.
+- an optional **facilitator**: one member with the facilitator role.
+- a **hop budget:** how many replies agents may trigger in a row without the user (configurable 0–20, default 4;
+  0 means agents never trigger each other).
+
+**Timeline.** It holds the user's messages, agent replies, and (once Phase 3 exists) the members' run reports.
+
+**Triggers.**
+- **The user @mentions an agent** → that agent replies. Several mentions → each agent replies, in order.
+- **An agent @mentions another member in its reply** → that agent is triggered automatically, within the hop budget.
+  - An agent can't trigger itself, and repeated mentions in one turn are merged.
+  - Hops reset whenever the user posts.
+  - When the budget runs out, the room pauses: "Waiting for you: PO Manager wants to ask Jira Triage". The pending
+    mentions are listed with a Continue button.
+- **The facilitator** never starts a conversation in an empty room. Once there are messages (even just the user
+  kicking things off), it's considered after each settled exchange: a user message with no @mention, or the end of
+  a chain of agent replies (debounced). It then decides whether to respond.
+  - It has an explicit `pass` action, and silence is the preferred outcome. A pass doesn't use a hop; a post does.
+  - With Phase 3, new run reports in the room also give it a chance to respond.
+
+**How an agent answers in a room.**
+- **Same setup as in its own chat:** the same `AgentRunner` loop with the agent's own manifest (instructions,
+  model, folders, skills, tools, limits, compaction). Its access never widens by being in a room.
+- **Context:** its system prompt gets a room section (the room name and theme, the other members with their
+  descriptions, and how @mentions work), followed by the recent room transcript with each message labelled by its
+  author. That transcript replaces the 1:1 history.
+- **Other agents' messages are data, not instructions**, like tool results. An agent can choose to help a colleague,
+  but it isn't bound by what they say.
+- **Separate histories:** room replies don't go into the agent's 1:1 history, at least at first, so the two
+  contexts stay apart.
+
+**The facilitator** gets a different addendum to its system prompt:
+- cross-reference the members' posts, and look for connections, contradictions, gaps, and risks against the theme
+- @mention the member who can fill a gap
+- summarize when that helps
+- otherwise `pass`
+
+Orchestration is the hardest prompt in the system, so use the strongest available model for the facilitator.
+
+**Safety.**
+- **Agent-triggered turns always ask before changing files**, whatever the agent's own `file_changes` policy says.
+  A poisoned email could make one agent post "@Report Writer overwrite the tracker". Whatever Report Writer
+  proposes still waits for the user's Apply.
+- **Everything posted is visible to every member.** An agent with a confidential folder may quote it to the room,
+  and the room settings say so.
+- **Cost:** one user message can fan out into several agent runs. The hop budget bounds this, and the room shows
+  the token usage of its turns. Room turns share the global concurrency cap with scheduled runs.
+- **Busy agents:** each agent has one work queue for its 1:1 chat, scheduled runs, and room turns. A mention of a
+  busy agent waits its turn.
+
+**Building blocks.**
+- **Data:** a `rooms` table (name, theme, members, facilitator, hop budget). Room messages are `messages` rows with a
+  `room_id` and an author (user or agent id). `tool_calls` and `changes` attach to message ids as today, so activity
+  steps and change cards work unchanged.
+- **Loop:** a pluggable history source (1:1 history vs. room transcript) and a room addendum to the system prompt.
+  Plus a mention parser (matched against member names) and a per-room turn scheduler that enforces hops.
+- **UI:**
+  - a Rooms section in the sidebar
+  - the room view: the channel timeline with an author avatar on each message
+  - @-autocomplete in the composer
+  - a room settings dialog (name, theme, members, facilitator, hop budget)
+  - a "Waiting for you" banner when the hop budget runs out
+
+**Order of work:** first rooms, @mentions, hops, and the facilitator (no dependency on the scheduler). Then members'
+run reports post into the rooms they belong to (needs Phase 3).
 
 ---
 
@@ -773,15 +875,40 @@ Agents run **only while the app is open and the computer is awake**, by design. 
   "Quit Space Agents" exits for real.
 - **Single instance.** Launching again focuses the existing window: macOS gets this for free with `.app` bundles; on
   Windows we use a named mutex plus `FindWindow`/`SetForegroundWindow` via `ctypes`.
-- **Scheduler behavior.**
-  - It ticks every 30 s and compares wall-clock time to each agent's `next_run_at`, so it handles sleep/wake.
-  - After sleep or a closed app, a missed run executes **once** (not once per missed interval) if
-    `run_on_startup_if_missed` is set.
-  - Respects `active_hours` and `weekdays`.
-  - **Jitter:** each agent gets a stable random offset within its interval, so that hundreds of users' hourly agents
-    don't all hit the shared AI server at :00.
-  - A global cap on concurrent runs (default 2) and a per-user request rate limit protect the shared server.
-- The UI makes it clear when agents are not running (e.g. "Paused: outside active hours", "Will run at 10:14").
+- ✅ **Scheduler behavior** (`runtime/scheduler.py`; built in Phase 3 step b).
+  - **Ticks:** every 30 s (the first 15 s after launch) it compares wall-clock time to each agent's stored
+    `next_run_at` (`schedule_state` table), so sleep/wake and restarts are handled the same way.
+  - **Slots:** an agent's scheduled times are fixed slots on its `weekdays`, inside its `active_hours`: start, then
+    every `every_minutes`, strictly before the end. Times are local wall-clock time.
+  - **Jitter (configurable):** each agent runs at its scheduled times plus its own random offset of up to
+    ±`schedule_jitter_minutes` (default 5).
+    - **Why:** hundreds of users' hourly agents shouldn't all hit the shared AI server at precisely :00. Lowering
+      the setting may lead to slow responses for that reason.
+    - **Drawn once and saved** (`schedule_state.jitter_seconds`), so an agent's times stay predictable
+      ("Next run 10:03", 11:03, …). It's redrawn only if the setting shrinks below it.
+    - **Random, not derived from the agent id:** agents made from the same template have the same id on every
+      machine, so an id-based offset would make them all fire together.
+    - **Edges:** with jitter, a run may start a few minutes before active hours begin or after they end.
+  - **On time** (due within the last 3 minutes): a scheduled run is queued through the agent's work queue.
+  - **Missed** (sleep, app closed): it runs **once**, not once per missed slot. Only one upcoming time is ever
+    stored per agent, so there's no backlog: an hourly agent whose app was closed for three days runs once on the
+    first check after launch (~15 s), then returns to its normal times.
+    - **When:** only if `run_on_startup_if_missed` is set and it's within active hours now. Otherwise it waits for
+      its next normal time, which still means once.
+    - **Catch-up runs go one at a time across agents**, whatever `max_concurrent_runs` says. After a long absence
+      (or waking from sleep) every scheduled agent catches up at the same moment, and running them serially spares
+      the user's machine and the shared server.
+    - **Spread:** different users open the app at different times, which also spreads these runs out.
+  - **Skipped slots:** a slot is skipped while the agent's previous scheduled run is still queued or running (so a
+    slow agent can't pile up runs), or when no model is configured.
+  - **Edits:** editing the schedule recomputes the next run from now. Disabling it, or deleting the agent, clears
+    the state.
+  - **Concurrency:** a global cap on concurrent runs (`max_concurrent_runs`, default 2, scheduled and Run now
+    alike; chat isn't capped) is enforced by the work queue. Catch-up runs additionally take turns, one at a time.
+    ⬜ A per-user request rate limit.
+- ✅ **The UI shows when agents will run:** a "Next run 10:07" / "Next run tomorrow 07:02" chip in the channel
+  header, and a clock in the sidebar with the same tooltip. They update live from `agent.schedule` events. Outside
+  active hours, the next run simply shows as the next active day.
 
 ---
 
@@ -837,8 +964,10 @@ space-agents/
       loop.py                  # AgentRunner: the tool-calling loop, history (with change outcomes), events
       prompts.py               # system prompt (+ skills list)
       compaction.py            # summarize the earlier part of long runs (§3.2 step 6)
+      dispatch.py              # per-agent work queue: chat replies and runs take turns; Stop
+      reports.py               # post_report: spec, validation, fallback, Markdown form
       dummy.py                 # placeholder replies when no model is configured
-      scheduler.py             # (planned) intervals, active hours, jitter, missed-run handling
+      scheduler.py             # slots (active hours, weekdays, jitter), the 30 s tick, missed-run catch-up
     tools/
       registry.py              # tool specs + execution; run_python guardrails; xlsx diff/repair script
       access.py                # FolderAccess: realpath containment, deny-list, read vs write, write-protected
@@ -1026,8 +1155,35 @@ endpoint; still to verify against the company gateway.
 the file, and Undo restores the old version. ✅ Met.
 
 ### Phase 3: Autonomous agents
-- Scheduler (intervals, active hours, weekdays, jitter, missed-run catch-up, concurrency cap) plus "Run now".
-- `task` field, `post_report`, report cards, Activity inbox, unread badges, sidebar status/snippets.
+
+Build order (each step usable on its own; MCP isn't needed, so runs are tested with file-checking tasks):
+- ✅ **a. Runs foundation:**
+  - the `runs` table
+  - the per-agent work queue (queued messages, Stop cancels queued work)
+  - **Run now**
+  - `post_report` with one nudge and a text fallback
+  - report cards
+  - "Running its task" status in the header and sidebar
+
+  Verified live with gpt-5-nano on a folder task: the run read the supplier PDF and tracker and posted a two-item
+  report. A chat message sent mid-run waited and was answered right after.
+- ✅ **b. Scheduler** (§5):
+  - wall-clock tick against a stored `next_run_at`
+  - slots on active days inside active hours, with a random ± jitter per agent (configurable, default ±5 min)
+  - one catch-up run after sleep or a closed app
+  - skipping a slot while the previous scheduled run is still going
+  - a global cap on concurrent runs
+  - "Next run 10:07" in the header and sidebar
+
+  Verified live with gpt-5-nano: a clock moved to the agent's first slot (07:02:21) queued a scheduled run, which
+  posted its report, and the next slot became 08:02:21.
+- ⬜ **c. Memory:** `remember`/`recall` and recent run summaries in the run context.
+- ⬜ **d. Report notifications** at or above `min_level`; reports in Activity; unread badges for runs.
+- ⬜ **e. Background:** close-to-background, single instance, and start at login (dev version until packaging).
+
+Scope:
+- ✅ Scheduler (intervals, active hours, weekdays, jitter, missed-run catch-up, concurrency cap) plus ✅ "Run now".
+- ✅ `task` field, ✅ `post_report`, ✅ report cards, Activity inbox, unread badges, ✅ sidebar status/snippets.
 - Memory (`remember`/`recall`) and recent-run context.
 - ✅ (pulled forward) **Compaction** for long runs (§3.2 step 6). Scheduled runs use the same loop, so they get it too.
 - ✅ (pulled forward) **Desktop notifications** for approvals: "<agent> requests approval" plus a one-sentence
@@ -1039,7 +1195,19 @@ the file, and Undo restores the old version. ✅ Met.
 - Start at login, close-to-background, single instance.
 
 **Exit:** the Purchase Order Manager example runs hourly on its own and notifies the user about deliveries and supplier
-delays with suggested next actions.
+delays with suggested next actions. Until MCP lands, the exit test is folder-based: it checks a folder of supplier
+updates hourly against the PO tracker.
+
+### Phase 3b: Rooms (group chats) (design in §3.5)
+- Rooms with a theme, members, and a configurable hop budget.
+- @mentions from the user and from agents, with hops counted and a "Waiting for you" pause.
+- A facilitator role that decides whether to respond once a conversation exists.
+- Agent-triggered turns always ask before changing files.
+- After Phase 3: members' run reports post into their rooms.
+
+**Exit:** in a room with PO Manager, Meeting Prep, and a facilitator, the user posts "anything I should worry about
+this week?". The agents answer from their own data, and the facilitator connects the Acme slip to Thursday's review
+and @mentions PO Manager for alternatives.
 
 ### Phase 4: Non-technical polish
 - **New Agent wizard:**
@@ -1074,14 +1242,15 @@ delays with suggested next actions.
   into the cache.
 - Responses API backend; multiple model fallbacks.
 - MCP resources and prompts; local stdio MCP servers.
-- Agent-to-agent handoff (e.g. PO Manager asks Report Writer to produce the weekly summary).
+- Agent-to-agent handoff (e.g. PO Manager asks Report Writer to produce the weekly summary): covered by rooms (§3.5);
+  a private `ask_agent` tool for 1:1 chats could reuse the same turn machinery later.
 - Event triggers (folder watch: "when a new file lands in Downloads/Invoices…").
 
 ---
 
 ## 9. Testing strategy
 
-**Built** (`pytest`, 126 tests, no window or network needed):
+**Built** (`pytest`, 147 tests, no window or network needed):
 - **Unit tests:**
   - manifest validation
   - config layers and `.env` parsing
@@ -1092,6 +1261,24 @@ delays with suggested next actions.
   - file marking (macOS quarantine attribute on applied changes; on/off setting)
   - compaction: what's summarized vs. kept, tool-call pairs never split, the summary cap, the fallback, the meter
   - skills: `SKILL.md` header parsing, folder layouts, symlinks, problems, `use_skill` output, read-only skill folders
+  - run reports: validation, the fallback, the Markdown form
+  - the v3 migration (messages rebuilt with ids kept; runs) and recovery of interrupted runs and queued messages
+- **Work queue** (`tests/test_dispatch.py`, real core loop, gated fake runner):
+  - per-agent order across chat and runs
+  - different agents in parallel
+  - Stop cancels current and queued work
+  - only work that ran triggers notifications
+  - the global run cap (runs wait for a slot; chats don't)
+  - catch-up runs take turns one at a time across agents
+- **Scheduler** (`tests/test_scheduler.py`, fake clock around a known Monday):
+  - slot math across active hours, weekdays, Friday → Monday, and short daily windows
+  - jitter: within ±the setting, spread out across agents, kept between ticks, redrawn when the setting shrinks,
+    0 means none; runs before and after active hours and across midnight
+  - on time runs once per slot
+  - skipped while the previous scheduled run is going
+  - missed slots catch up once, inside active hours, only with catch-up on. Closed for three days: one run (or
+    none until the next normal time, if opened after hours)
+  - edits recompute; disabling or deleting clears the state; no model means no run
   - document extraction (text PDF, scanned page, DOCX, XLSX with dates, PPTX, unsupported/corrupt)
   - cache and FTS5 search (extract once per version, rename detection, page ranges)
   - proposed changes: auto-apply policy, apply, undo, conflicts, discard, retention
@@ -1116,6 +1303,13 @@ delays with suggested next actions.
   - disallowed file types not saved; `extra_file_types` allowing more
   - compaction with the agent's model, the fallback when it fails, and turning it off
   - an agent loading a skill and reading the skill's files; no skill tool when skills are off
+  - runs:
+    - fresh context
+    - `post_report` ends the run
+    - the nudge and the fallback
+    - reporting after the tool budget is used up
+    - failed runs
+    - reports in later chat history
 - **Bridge:** the same calls the UI makes (agents CRUD, avatars, chat, discard with feedback). A fake native window
   covers the permission rules: folders and skills folders only from the picker, write access and server addresses
   only after a native OK, Read & write refused on sensitive folders, and `list_skills` only for known folders.
@@ -1138,7 +1332,6 @@ delays with suggested next actions.
   - timeout kill and recovery
 
 **Planned:**
-- scheduler math (active hours, jitter, sleep/wake catch-up)
 - OpenAPI → tool conversion with real specs as fixtures
 - fake MCP/OpenAPI/document servers
 - extraction timeouts once it runs in a worker process
@@ -1178,7 +1371,9 @@ delays with suggested next actions.
 | Page trust | The webview page is assumed compromisable: permission changes (new folders, write access, server addresses, skills folders) need native UI the page can't script (§4.5) |
 | Agent file writes | Never into system, app-settings, autostart, or hidden folders; allow-listed file types (configurable via `extra_file_types`, never launchers); files marked as downloaded (§4.1) |
 | Sandbox network | None. `connect-src 'self'`, vendored packages only. "Download-only" access was considered and rejected: a GET can carry data in its URL, so only a host allow-list would actually stop leaks |
+| Scheduling | Fixed slots per agent (active days, active hours, every N minutes) plus a random per-agent jitter of up to ±`schedule_jitter_minutes` (default 5), drawn once and saved (an id-based offset would line up agents made from the same template). Missed slots run once on return (if catch-up is on and it's within active hours). A slot is skipped while the previous scheduled run is still going. Global run cap, default 2 (§5) |
 | Long runs | Per-agent compaction with the agent's own model, at a token threshold, keeping the latest round verbatim (§3.2 step 6) |
+| Rooms (group chats) | Shared timeline with @mentions, used the same way by the user and by agents, within a configurable hop budget. An optional facilitator runs once messages exist and may pass. Each room has a theme. Agent-triggered turns always ask before changing files. Planned after Phase 3 (§3.5) |
 | Skills | Standard `SKILL.md` folders, per agent, loaded on demand with `use_skill`; read-only for agents; folder chosen in the native picker |
 | Git | The maintainer makes commits; tooling/assistants don't commit |
 

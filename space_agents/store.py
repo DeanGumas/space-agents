@@ -104,6 +104,51 @@ SCHEMA = [
     );
     CREATE VIRTUAL TABLE doc_fts USING fts5(sha256 UNINDEXED, page UNINDEXED, text);
     """,
+    # v3: runs (Run now / scheduled), and a per-agent work queue (messages can be 'queued'). SQLite can't change a
+    # CHECK constraint in place, so messages is rebuilt (ids are kept).
+    """
+    CREATE TABLE messages_v3 (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id    TEXT NOT NULL,
+        role        TEXT NOT NULL CHECK (role IN ('user', 'agent', 'system')),
+        content     TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('queued', 'streaming', 'done', 'error')),
+        created_at  TEXT NOT NULL,
+        usage       TEXT,
+        run_id      INTEGER
+    );
+    INSERT INTO messages_v3 (id, agent_id, role, content, status, created_at, usage)
+        SELECT id, agent_id, role, content, status, created_at, usage FROM messages;
+    DROP TABLE messages;
+    ALTER TABLE messages_v3 RENAME TO messages;
+    CREATE INDEX messages_agent ON messages (agent_id, id);
+    CREATE TABLE runs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id    TEXT NOT NULL,
+        trigger     TEXT NOT NULL CHECK (trigger IN ('manual', 'schedule')),
+        status      TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'error', 'stopped')),
+        task        TEXT NOT NULL,
+        message_id  INTEGER,
+        report      TEXT,
+        created_at  TEXT NOT NULL,
+        started_at  TEXT,
+        finished_at TEXT
+    );
+    CREATE INDEX runs_agent ON runs (agent_id, id);
+    """,
+    # v4: the scheduler's memory: each agent's next scheduled run, so runs missed while the app was closed are noticed
+    """
+    CREATE TABLE schedule_state (
+        agent_id     TEXT PRIMARY KEY,
+        schedule_key TEXT NOT NULL,
+        next_run_at  TEXT,
+        last_run_at  TEXT
+    );
+    """,
+    # v5: each scheduled agent's own random jitter (seconds before/after its scheduled times)
+    """
+    ALTER TABLE schedule_state ADD COLUMN jitter_seconds INTEGER;
+    """,
 ]
 
 
@@ -211,6 +256,8 @@ class Store:
             path.unlink()
             (self.avatars_dir / f"{agent_id}.png").unlink(missing_ok=True)
             self._db.execute("DELETE FROM messages WHERE agent_id = ?", (agent_id,))
+            self._db.execute("DELETE FROM runs WHERE agent_id = ?", (agent_id,))
+            self._db.execute("DELETE FROM schedule_state WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM tool_calls WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM changes WHERE agent_id = ? AND status = 'pending'", (agent_id,))
 
@@ -249,11 +296,13 @@ class Store:
 
     # --- messages -----------------------------------------------------------------------------------------------
 
-    def add_message(self, agent_id: str, role: str, content: str, status: str = "done") -> dict[str, Any]:
+    def add_message(
+        self, agent_id: str, role: str, content: str, status: str = "done", run_id: int | None = None
+    ) -> dict[str, Any]:
         with self._lock:
             cur = self._db.execute(
-                "INSERT INTO messages (agent_id, role, content, status, created_at) VALUES (?, ?, ?, ?, ?)",
-                (agent_id, role, content, status, now_iso()),
+                "INSERT INTO messages (agent_id, role, content, status, created_at, run_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (agent_id, role, content, status, now_iso(), run_id),
             )
             return self.get_message(cur.lastrowid)
 
@@ -297,7 +346,78 @@ class Store:
             ).fetchall()
         return {r["agent_id"]: dict(r) for r in rows}
 
-    def recover_interrupted(self) -> None:
-        """Messages left 'streaming' by a crash or quit are marked as errors on startup."""
+    # --- runs ---------------------------------------------------------------------------------------------------
+
+    def add_run(self, agent_id: str, trigger: str, task: str) -> dict[str, Any]:
+        """A run of the agent's task, with its (empty, queued) report message in the agent's channel."""
         with self._lock:
-            self._db.execute("UPDATE messages SET status = 'error' WHERE status = 'streaming'")
+            cur = self._db.execute(
+                "INSERT INTO runs (agent_id, trigger, status, task, created_at) VALUES (?, ?, 'queued', ?, ?)",
+                (agent_id, trigger, task, now_iso()),
+            )
+            run_id = cur.lastrowid
+            message = self.add_message(agent_id, "agent", "", status="queued", run_id=run_id)
+            self._db.execute("UPDATE runs SET message_id = ? WHERE id = ?", (message["id"], run_id))
+            return self.get_run(run_id)
+
+    def get_run(self, run_id: int) -> dict[str, Any]:
+        row = self.query_one("SELECT * FROM runs WHERE id = ?", (run_id,))
+        if row is None:
+            raise NotFound(run_id)
+        return run_view(row)
+
+    def update_run(self, run_id: int, **fields: Any) -> None:
+        if "report" in fields and fields["report"] is not None:
+            fields["report"] = json.dumps(fields["report"])
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self.execute(f"UPDATE runs SET {sets} WHERE id = ?", (*fields.values(), run_id))
+
+    def runs_for(self, run_ids: list[int]) -> dict[int, dict[str, Any]]:
+        if not run_ids:
+            return {}
+        rows = self.query(f"SELECT * FROM runs WHERE id IN ({','.join('?' * len(run_ids))})", tuple(run_ids))
+        return {r["id"]: run_view(r) for r in rows}
+
+    def attach_runs(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Add each message's run (or None) as `run`, for the UI's report cards."""
+        runs = self.runs_for([m["run_id"] for m in messages if m.get("run_id")])
+        for m in messages:
+            m["run"] = runs.get(m.get("run_id"))
+        return messages
+
+    # --- schedule state (runtime/scheduler.py) -------------------------------------------------------------------
+
+    def schedule_states(self) -> dict[str, dict[str, Any]]:
+        return {r["agent_id"]: r for r in self.query("SELECT * FROM schedule_state")}
+
+    def set_schedule_state(
+        self,
+        agent_id: str,
+        schedule_key: str,
+        next_run_at: str | None,
+        last_run_at: str | None = None,
+        jitter_seconds: int | None = None,
+    ) -> None:
+        """Upsert; a None last_run_at or jitter_seconds keeps the stored value."""
+        self.execute(
+            "INSERT INTO schedule_state (agent_id, schedule_key, next_run_at, last_run_at, jitter_seconds)"
+            " VALUES (?, ?, ?, ?, ?) ON CONFLICT (agent_id) DO UPDATE SET schedule_key = excluded.schedule_key,"
+            " next_run_at = excluded.next_run_at, last_run_at = COALESCE(excluded.last_run_at, last_run_at),"
+            " jitter_seconds = COALESCE(excluded.jitter_seconds, jitter_seconds)",
+            (agent_id, schedule_key, next_run_at, last_run_at, jitter_seconds),
+        )
+
+    def clear_schedule_state(self, agent_id: str) -> None:
+        self.execute("DELETE FROM schedule_state WHERE agent_id = ?", (agent_id,))
+
+    def recover_interrupted(self) -> None:
+        """Work left unfinished by a crash or quit (streaming or queued) is marked as interrupted on startup."""
+        with self._lock:
+            self._db.execute("UPDATE messages SET status = 'error' WHERE status IN ('streaming', 'queued')")
+            self._db.execute(
+                "UPDATE runs SET status = 'error', finished_at = ? WHERE status IN ('queued', 'running')", (now_iso(),)
+            )
+
+
+def run_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {**row, "report": json.loads(row["report"]) if row.get("report") else None}

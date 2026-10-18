@@ -15,7 +15,6 @@ Conventions
 
 from __future__ import annotations
 
-import concurrent.futures
 import functools
 import logging
 import os
@@ -36,8 +35,9 @@ from space_agents.core import Core, EventBus
 from space_agents.manifest import Manifest, ManifestError
 from space_agents.platform.appearance import open_in_file_manager
 from space_agents.platform.notify import Notifier
-from space_agents.runtime.dummy import dummy_reply
+from space_agents.runtime.dispatch import Dispatcher
 from space_agents.runtime.loop import AgentRunner
+from space_agents.runtime.scheduler import Scheduler
 from space_agents.sandbox.pyodide import PyodideSandbox, warm_packages
 from space_agents.settings import UserSettings, clean_overrides
 from space_agents.skills import load_skills
@@ -148,6 +148,8 @@ class Api:
         notifier: Notifier | None = None,
         on_ui_ready: Callable[[dict[str, Any]], None] | None = None,
         confirm: Callable[[str, str], bool] | None = None,
+        dispatcher: Dispatcher | None = None,
+        scheduler: Scheduler | None = None,
     ) -> None:
         self._config = config
         self._reload_config = reload_config
@@ -168,8 +170,10 @@ class Api:
         self._ui_focused = True  # reported by the UI (window focus/visibility)
         self._ui_viewing: str | None = None  # agent whose channel is open
         self._window: webview.Window | None = None
-        self._busy: set[str] = set()
-        self._tasks: dict[str, concurrent.futures.Future] = {}
+        # One work queue per agent (chat replies and runs); the bridge only starts and stops work.
+        self._dispatch = dispatcher or Dispatcher(store=store, core=core, events=events, runner=runner, changes=changes)
+        self._dispatch.on_finished = self._after_work
+        self._scheduler = scheduler  # only for showing each agent's next run; it runs on the core loop
 
     def _attach_window(self, window: webview.Window) -> None:
         self._window = window
@@ -233,7 +237,8 @@ class Api:
     def _agent_view(self, m: Manifest, last: dict[str, Any] | None) -> dict[str, Any]:
         view = m.to_dict()
         view["avatar_url"] = self._store.avatar_data_url(m)
-        view["status"] = "responding" if m.id in self._busy else "idle"
+        view["status"] = self._dispatch.status(m.id)
+        view["next_run_at"] = self._scheduler.next_run(m) if self._scheduler else None
         view["last_message"] = (
             {"role": last["role"], "preview": last["content"][:160], "created_at": last["created_at"]} if last else None
         )
@@ -338,7 +343,7 @@ class Api:
 
     @endpoint
     def delete_agent(self, agent_id: str) -> None:
-        if agent_id in self._busy:
+        if self._dispatch.busy(agent_id):
             raise UserError("This agent is busy. Try again in a moment.")
         self._store.delete_agent(agent_id)
         self._changes.emit_attention()  # its pending proposals are gone
@@ -353,50 +358,34 @@ class Api:
         for m in messages:
             m["tool_calls"] = calls.get(m["id"], [])
             m["changes"] = changes.get(m["id"], [])
-        return messages
+        return self._store.attach_runs(messages)
 
     @endpoint
     def send_message(self, agent_id: str, text: str) -> dict[str, Any]:
+        """Post the user's message. If the agent is busy, its reply waits in the agent's queue."""
         text = (text or "").strip()
         if not text:
             raise UserError("Message is empty.")
         if len(text) > MAX_MESSAGE_CHARS:
             raise UserError(f"Message is too long (max {MAX_MESSAGE_CHARS:,} characters).")
-        if agent_id in self._busy:
-            raise UserError("This agent is still responding.")
-        return self._start_reply(self._store.get_agent(agent_id), text)
+        return self._dispatch.chat(self._store.get_agent(agent_id), text)
 
-    def _start_reply(self, agent: Manifest, text: str, revising: bool = False) -> dict[str, Any]:
-        """Store the user's message and start the agent's reply in the background.
+    @endpoint
+    def run_agent(self, agent_id: str) -> dict[str, Any]:
+        """Run now: the agent does its task on its own and posts a report in its channel (queued if it's busy)."""
+        agent = self._store.get_agent(agent_id)
+        if not agent.task.strip():
+            raise UserError("This agent has no task yet. Add one under Edit → Schedule.")
+        if not self._runner.config.llm_ready:
+            raise UserError("Runs need a model. Set the model server and API key first (see Settings).")
+        return {"message": self._dispatch.run(agent, "manual")}
 
-        `revising`: the reply answers feedback on a discarded change, so the agent stays in Activity while it works.
-        """
-        agent_id = agent.id
-        user_msg = self._store.add_message(agent_id, "user", text)
-        reply = self._store.add_message(agent_id, "agent", "", status="streaming")
-        reply["tool_calls"], reply["changes"] = [], []
-        self._busy.add(agent_id)
-        if self._config.llm_ready:
-            future = self._core.submit(self._runner.chat(agent, reply["id"]))
-        else:  # no model configured: placeholder replies so the UI can still be exercised
-            future = self._core.submit(dummy_reply(self._store, self._events, agent, text, reply["id"]))
-        self._tasks[agent_id] = future
-
-        if revising:
-            self._changes.set_revising(agent_id, True)
-
-        def finished(_f: concurrent.futures.Future) -> None:
-            self._busy.discard(agent_id)
-            self._tasks.pop(agent_id, None)
-            try:
-                if revising:
-                    self._changes.set_revising(agent_id, False)
-                self._notify_if_awaiting_approval(agent, reply["id"])
-            except Exception:  # a notification problem must never break chat
-                log.exception("Post-reply notification failed")
-
-        future.add_done_callback(finished)
-        return {"user_message": user_msg, "agent_message": reply}
+    def _after_work(self, agent_id: str, message_id: int) -> None:
+        try:
+            agent = self._store.get_agent(agent_id)
+        except NotFound:
+            return
+        self._notify_if_awaiting_approval(agent, message_id)
 
     def _notify_if_awaiting_approval(self, agent: Manifest, message_id: int) -> None:
         """After a reply: if it left changes for the user to approve, pop up a desktop notification.
@@ -429,8 +418,8 @@ class Api:
 
     @endpoint
     def stop_agent(self, agent_id: str) -> bool:
-        future = self._tasks.get(agent_id)
-        return bool(future and future.cancel())
+        """Stop what the agent is doing, and anything it's waiting to do."""
+        return self._dispatch.stop(agent_id)
 
     # --- proposed changes -------------------------------------------------------------------------------------
 
@@ -445,13 +434,11 @@ class Api:
         if len(feedback) > MAX_MESSAGE_CHARS:
             raise UserError(f"Feedback is too long (max {MAX_MESSAGE_CHARS:,} characters).")
         agent_id = self._changes.get(change_id)["agent_id"]
-        if feedback and agent_id in self._busy:
-            raise UserError("The agent is still responding. Try again when it's done.")
         change = self._changes.discard(change_id)
         if not feedback:
             return {"change": change}
         text = f"I discarded your proposed change to {change['name']}. Here's what should be different:\n\n{feedback}"
-        return {"change": change, **self._start_reply(self._store.get_agent(agent_id), text, revising=True)}
+        return {"change": change, **self._dispatch.chat(self._store.get_agent(agent_id), text, revising=True)}
 
     @endpoint
     def undo_change(self, change_id: str) -> dict[str, Any]:

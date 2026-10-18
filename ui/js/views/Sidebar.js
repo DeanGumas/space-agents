@@ -24,7 +24,7 @@ import {
 } from "../state.js";
 import { toDraft } from "./AgentEditor.js";
 import { THEMES } from "../lib/theme.js";
-import { cx, relativeTime, scheduleSummary } from "../lib/util.js";
+import { cx, nextRunLabel, relativeTime, scheduleSummary } from "../lib/util.js";
 
 export function Sidebar() {
   const current = view.value;
@@ -91,10 +91,12 @@ export function Sidebar() {
 }
 
 function AgentRow({ agent, active, unreadCount, compact }) {
-  const busy = agent.status === "responding";
+  const busy = agent.status !== "idle";
   const last = agent.last_message;
   const preview = busy
-    ? "Responding…"
+    ? agent.status === "running"
+      ? "Running its task…"
+      : "Responding…"
     : last
       ? `${last.role === "user" ? "You: " : ""}${last.preview.replace(/[#*_`>]/g, "").replace(/\s+/g, " ")}`
       : scheduleSummary(agent.schedule) || agent.description || "No messages yet";
@@ -119,7 +121,9 @@ function AgentRow({ agent, active, unreadCount, compact }) {
       </span>
       <span class="side">
         ${unreadCount > 0 && html`<span class="badge">${unreadCount}</span>`}
-        ${busy && html`<span class="status-dot busy" title="Responding"></span>`}
+        ${busy && html`<span class="status-dot busy" title=${agent.status === "running" ? "Running" : "Responding"}></span>`}
+        ${!busy && agent.next_run_at && !compact &&
+        html`<span class="scheduled" title=${nextRunLabel(agent.next_run_at)}><${Icon} name="clock" size="sm" /></span>`}
       </span>
     </button>
   `;

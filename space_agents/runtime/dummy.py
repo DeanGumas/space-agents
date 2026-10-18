@@ -49,7 +49,8 @@ async def dummy_reply(store: Store, events: EventBus, agent: Manifest, user_text
         store.update_message(message_id, content=sent, status="done")
         events.emit("message.done", agent_id=agent.id, message=store.get_message(message_id))
     except asyncio.CancelledError:
-        store.update_message(message_id, content=sent, status="error")
+        store.update_message(message_id, content=(sent + "\n\n_Stopped._").strip(), status="error")
+        events.emit("message.done", agent_id=agent.id, message=store.get_message(message_id))
         raise
     except Exception:
         log.exception("Dummy reply failed")

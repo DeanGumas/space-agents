@@ -27,7 +27,8 @@ from space_agents.documents.library import DocumentLibrary
 from space_agents.llm.client import ChatClient, LLMError
 from space_agents.manifest import Manifest
 from space_agents.runtime import compaction
-from space_agents.runtime.prompts import system_prompt
+from space_agents.runtime.prompts import run_request, system_prompt
+from space_agents.runtime.reports import POST_REPORT_SPEC, fallback_report, report_markdown
 from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.skills import SkillSet, load_skills
 from space_agents.store import Store, now_iso
@@ -44,6 +45,7 @@ CHANGE_OUTCOMES = {
     "undone": "applied, then undone by the user",
 }
 TOOL_RESULT_CHARS = 12_000
+REPORT_NUDGE = "(Now call post_report with your findings: a one-line summary and the items. Don't reply in text.)"
 
 
 class AgentRunner:
@@ -76,7 +78,8 @@ class AgentRunner:
 
     def _history(self, agent_id: str, before_id: int) -> list[dict[str, Any]]:
         rows = self._store.query(
-            "SELECT id, role, content FROM (SELECT * FROM messages WHERE agent_id = ? AND id < ? AND content != ''"
+            "SELECT id, role, content, run_id FROM (SELECT * FROM messages WHERE agent_id = ? AND id < ?"
+            " AND content != '' AND status != 'queued'"
             " ORDER BY id DESC LIMIT ?) ORDER BY id",
             (agent_id, before_id, HISTORY_MESSAGES),
         )
@@ -86,6 +89,8 @@ class AgentRunner:
         history = []
         for r in rows:
             content = r["content"]
+            if r["run_id"]:
+                content = f"[Report from a run of your task]\n{content}"
             if r["role"] == "agent" and changes.get(r["id"]):
                 notes = "\n".join(
                     f"- {'Update' if c['kind'] == 'modify' else 'Create'} {c['target']}: {CHANGE_OUTCOMES[c['status']]}"
@@ -97,6 +102,17 @@ class AgentRunner:
 
     async def chat(self, agent: Manifest, message_id: int) -> None:
         """Answer the latest user message for `agent`, writing into the (already created) agent message."""
+        await self._respond(agent, message_id)
+
+    async def run(self, agent: Manifest, run: dict[str, Any]) -> None:
+        """Do the agent's task on its own (Run now or scheduled) and deliver a report (PLAN.md §3.3).
+
+        Starts from a fresh context: the system prompt with a run section, then the task. The run ends when the model
+        calls post_report; without it, the model's final answer becomes the report.
+        """
+        await self._respond(agent, run["message_id"], run)
+
+    async def _respond(self, agent: Manifest, message_id: int, run: dict[str, Any] | None = None) -> None:
         config = self.config
         model = agent.model.name or (config.models[0] if config.models else "")
         # Re-read every run, so edits to the skills take effect without re-saving the agent.
@@ -112,12 +128,14 @@ class AgentRunner:
             protected=[config.data_dir],
             extra_file_types=config.extra_file_types,
             skills=skills,
+            run=run is not None,
         )
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(agent, tools.access, skills)},
-            *self._history(agent.id, message_id),
-        ]
-        text, usage, status = "", {}, "done"
+        system = {"role": "system", "content": system_prompt(agent, tools.access, skills, run=run is not None)}
+        if run:
+            messages: list[dict[str, Any]] = [system, {"role": "user", "content": run_request(run["task"])}]
+        else:
+            messages = [system, *self._history(agent.id, message_id)]
+        text, usage, status, stopped, nudged = "", {}, "done", False, False
         deadline = time.monotonic() + agent.limits.max_minutes * 60
         calls_left = agent.limits.max_tool_calls
         request = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
@@ -129,7 +147,7 @@ class AgentRunner:
             text += delta
             self._events.emit("message.delta", agent_id=agent.id, message_id=message_id, delta=delta)
 
-        self._events.emit("agent.status", agent_id=agent.id, status="responding")
+        self._events.emit("agent.status", agent_id=agent.id, status="running" if run else "responding")
         try:
             if not model:
                 raise LLMError("No model is set. Pick one in the agent's Model tab.")
@@ -143,10 +161,12 @@ class AgentRunner:
                     )
                     meter.reset()
                 sent = len(messages)
+                # Out of tool budget (or nudged to report): a chat answers without tools; a run may still report.
+                specs = tools.specs() if allow_tools and not nudged else ([POST_REPORT_SPEC] if run else None)
                 result = await client.chat(
                     model=model,
                     messages=messages,
-                    tools=tools.specs() if allow_tools else None,
+                    tools=specs,
                     temperature=agent.model.temperature,
                     reasoning_effort=config.reasoning_effort or None,
                     on_text=on_text,
@@ -154,6 +174,13 @@ class AgentRunner:
                 _add_usage(usage, result.usage)
                 meter.measure(result.usage.get("prompt_tokens"), sent)
                 if not result.tool_calls:
+                    if run and tools.report is None and not nudged:
+                        # Small models often write the report as text instead of calling post_report. One nudge,
+                        # with only post_report on offer, gets a structured report; otherwise the text is used.
+                        nudged = True
+                        messages.append({"role": "assistant", "content": result.content or ""})
+                        messages.append({"role": "user", "content": REPORT_NUDGE})
+                        continue
                     break
                 if text and not text.endswith("\n"):
                     await on_text("\n\n")  # keep a preamble separate from the final answer
@@ -171,14 +198,15 @@ class AgentRunner:
                     calls_left -= 1
                     content = await self._run_tool(agent, message_id, tools, call)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                if tools.report is not None or not allow_tools or nudged:
+                    break  # the report ends a run; and a round past the budget is the last one
                 if calls_left <= 0 or time.monotonic() >= deadline:
-                    messages.append(
-                        {"role": "user", "content": "(Tool limit reached. Answer now with what you have; no tools.)"}
-                    )
-            if not text.strip():
+                    limit_note = "Call post_report now with what you have." if run else "Answer now with what you have."
+                    messages.append({"role": "user", "content": f"(Tool limit reached. {limit_note} No other tools.)"})
+            if not text.strip() and not tools.report:
                 text = "(The model returned an empty answer.)"
         except asyncio.CancelledError:
-            status = "error"
+            status, stopped = "error", True
             text = (text + "\n\n_Stopped._").strip()
             raise
         except LLMError as e:
@@ -189,10 +217,17 @@ class AgentRunner:
             status = "error"
             text = (text + "\n\n⚠️ Something went wrong. Details are in the log.").strip()
         finally:
+            if run:
+                report = tools.report or (fallback_report(text) if status == "done" else None)
+                if report:
+                    text = report_markdown(report)
+                run_status = "stopped" if stopped else status
+                self._store.update_run(run["id"], status=run_status, report=report, finished_at=now_iso())
             self._store.update_message(message_id, content=text, status=status, usage=usage)
             if usage:
                 log.info("Usage for %s (%s): %s", agent.id, model, usage)
-            self._events.emit("message.done", agent_id=agent.id, message=self._store.get_message(message_id))
+            message = self._store.attach_runs([self._store.get_message(message_id)])[0]
+            self._events.emit("message.done", agent_id=agent.id, message=message)
             self._events.emit("agent.status", agent_id=agent.id, status="idle")
 
     async def _compact(
@@ -319,4 +354,5 @@ def _pending_summary(name: str, args: dict[str, Any]) -> str:
         "run_python": str(args.get("description") or "Running analysis")[:200],
         "compact_context": "Summarizing earlier work to free up space",
         "use_skill": f"Using the {args['name']} skill" if args.get("name") else "Using a skill",
+        "post_report": "Writing the report",
     }.get(name, name)

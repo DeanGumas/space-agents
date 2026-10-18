@@ -13,6 +13,8 @@ const STEP_ICONS = {
   search_document: "search",
   run_python: "square-terminal",
   compact_context: "fold-vertical",
+  use_skill: "graduation-cap",
+  post_report: "clipboard-list",
 };
 
 export function ActivitySteps({ calls }) {
