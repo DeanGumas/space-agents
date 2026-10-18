@@ -291,7 +291,8 @@ resolved from the catalog or auto-detected.
 ```python
 class ToolSource(Protocol):
     id: str
-    async def list_tools(self) -> list[ToolSpec]: ...     # name, description, JSON schema, read_only flag
+
+    async def list_tools(self) -> list[ToolSpec]: ...  # name, description, JSON schema, read_only flag
     async def call_tool(self, name: str, args: dict) -> ToolResult: ...
 ```
 
@@ -595,6 +596,8 @@ Users can give an agent files directly in chat, no folder grant needed.
   "notifications": { "desktop": true, "min_level": "action" },   // info | action | urgent
   "memory": { "enabled": true },
   "limits": { "max_tool_calls": 30, "max_minutes": 10 },
+  // Summarize earlier work when a run gets long (§3.2 step 6). Tokens; the summary uses the agent's model.
+  "compaction": { "enabled": true, "trigger_tokens": 100000, "summary_tokens": 2000 },
 
   // Forward-compatible: external actions will require approval. Unused in v1.
   "permissions": { "external_actions": "never" }                  // never | ask | allow
@@ -660,8 +663,19 @@ Steps:
    ```
    A tool call is more reliable across local models than JSON mode. If the model doesn't call it, its final text is
    wrapped as a single `info` item.
-6. **Context management:** a rough token estimate (chars/4) is checked against the working budget, capped by the
-   model's context length. Old tool results are elided first, then older turns are summarized.
+6. ✅ **Context management (compaction),** per agent (`compaction` in the manifest, Model tab → Long tasks):
+   - **When:** before each model call, the run's size is the model's own `prompt_tokens` from the last call plus a
+     chars/4 estimate of what was added since. Past `trigger_tokens` (default 100k), the run is compacted.
+   - **How:** the agent's own model summarizes the earlier part in about `summary_tokens` (default 2k). It continues
+     from `[system prompt, summary + the request verbatim, latest round of tool calls and results]`. Tool calls and
+     results are never split.
+   - **If the summary call fails:** old tool results are dropped instead, and compaction isn't retried in that run.
+   - **Visible:** each compaction is an activity step ("Summarized earlier work…"), and "Show details" shows the
+     summary.
+   - **Tested** live with gpt-5-nano: models overshoot length targets (~1.5×), so the prompt asks for half a word per
+     budget token and the summary is cut only past 1.5× the budget, with the request and remaining work listed
+     first.
+   - **Planned:** a default trigger from the model's context length once `/models` reports it.
 
 ### 3.3 Chat vs. scheduled runs
 

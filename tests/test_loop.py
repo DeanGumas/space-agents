@@ -345,3 +345,62 @@ async def test_extra_file_types_setting_allows_more(env, tmp_path):
     runner = make_runner((store, events, docs, changes, config, agent, work), client, sandbox)
     await ask(env, runner, "Write a helper script")
     assert (work / "helper.py").read_text() == "print()"
+
+
+def big_read(i):
+    return ChatResult(tool_calls=[call("read_document", path="Acme Supplier Update.pdf")], usage={"prompt_tokens": i})
+
+
+async def test_long_runs_are_compacted_with_the_agents_model(env, tmp_path):
+    store, events, *_, agent, _ = env
+    agent.compaction.trigger_tokens = 9_000
+    client = ScriptedClient(
+        [
+            big_read(1_000),
+            big_read(9_500),  # over the trigger: the next call is the summary
+            ChatResult(
+                content="Acme: PO 45821 slips to Oct 14.", usage={"prompt_tokens": 9_600, "total_tokens": 9_700}
+            ),
+            ChatResult(content="PO 45821 is late.", usage={"prompt_tokens": 800}),
+        ]
+    )
+    msg = await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Any Acme delays?")
+    assert msg["status"] == "done" and msg["content"] == "PO 45821 is late."
+
+    summarize = client.requests[2]
+    assert summarize["tools"] is None and summarize["model"] == "test-model"
+    assert "compress the working memory" in summarize["messages"][0]["content"]
+    assert summarize["max_completion_tokens"] == 2_000 + 4_000
+
+    after = client.requests[3]["messages"]
+    assert after[0]["role"] == "system"
+    assert "slips to Oct 14" in after[1]["content"] and after[1]["content"].endswith("Any Acme delays?")
+    assert after[2]["tool_calls"] and after[3]["role"] == "tool"  # the latest round is kept as-is
+    assert len(after) == 4
+
+    steps = [e["call"] for e in events.of("tool.done")]
+    assert [s["name"] for s in steps] == ["read_document", "read_document", "compact_context"]
+    assert steps[-1]["status"] == "done" and steps[-1]["summary"].startswith("Summarized earlier work")
+    assert json.loads(msg["usage"])["total_tokens"] == 9_700  # the summary call counts toward the run
+
+
+async def test_failed_compaction_falls_back_to_dropping_old_tool_results(env, tmp_path):
+    *_, agent, _ = env
+    agent.compaction.trigger_tokens = 9_000
+    client = ScriptedClient(
+        [big_read(1_000), big_read(9_500), LLMError("context too long"), big_read(9_800), ChatResult(content="Done.")]
+    )
+    msg = await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Any Acme delays?")
+    assert msg["status"] == "done"
+    sent = client.requests[3]["messages"]
+    assert sent[3]["content"].startswith("(Earlier tool result removed") and "October" in sent[5]["content"]
+    assert len(client.requests) == 5  # no second attempt after a failure
+
+
+async def test_compaction_can_be_turned_off(env, tmp_path):
+    *_, agent, _ = env
+    agent.compaction.enabled = False
+    agent.compaction.trigger_tokens = 9_000
+    client = ScriptedClient([big_read(1_000), big_read(9_500), ChatResult(content="Done.")])
+    await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Any Acme delays?")
+    assert len(client.requests) == 3 and all(r["tools"] for r in client.requests[:2])

@@ -83,3 +83,11 @@ def test_slugify():
     assert slugify("Purchase Order Manager!") == "purchase-order-manager"
     assert slugify("📦") == "agent"
     assert len(slugify("x" * 100)) <= 40
+
+
+def test_compaction_defaults_and_validation():
+    c = Manifest.from_dict({"name": "Helper"}).compaction
+    assert (c.enabled, c.trigger_tokens, c.summary_tokens) == (True, 100_000, 2_000)
+    assert set(errors_for({"name": "x", "compaction": {"trigger_tokens": 100}})) == {"compaction.trigger_tokens"}
+    errors = errors_for({"name": "x", "compaction": {"trigger_tokens": 20_000, "summary_tokens": 10_000}})
+    assert "quarter" in errors["compaction.summary_tokens"]

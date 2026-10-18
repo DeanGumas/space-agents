@@ -59,6 +59,19 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
    Without a model, `runtime/dummy.py` streams a placeholder.
 4. "Stop" cancels the run's future; the message is saved as stopped.
 
+**Long runs (compaction, `runtime/compaction.py`).** Every model call resends the run so far, so a run that reads
+many documents can outgrow the model's context window. Before each call, the loop measures the run's size: the
+model's own `prompt_tokens` from the last call plus a chars/4 estimate of what's been added since.
+
+Past the agent's `compaction.trigger_tokens`, it compacts the run:
+1. The agent's own model summarizes everything except the system prompt and the latest round of tool calls and
+   results, in about `summary_tokens`.
+2. The run continues from `[system prompt, summary + the user's request verbatim, latest round]`.
+3. The step shows up in the timeline as `compact_context`, and its result is the summary text.
+
+If the summary call fails, older tool results are replaced by a short note instead, and compaction isn't retried in
+that run. The summary call's tokens count toward the run's usage.
+
 ## Request flow: reviewing a proposed change
 
 Files an agent produces become *proposed changes* (`changes.py`; details in

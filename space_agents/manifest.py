@@ -48,6 +48,15 @@ class ModelConfig:
 
 
 @dataclass
+class Compaction:
+    """Summarize earlier work when a run's context gets long, so big tasks don't overflow the model's window."""
+
+    enabled: bool = True
+    trigger_tokens: int = 100_000  # summarize once the conversation sent to the model is about this big
+    summary_tokens: int = 2_000  # target length of each summary
+
+
+@dataclass
 class ServerGrant:
     id: str
     tools: str | list[str] = "read_only"  # "read_only" or an explicit list of tool names
@@ -113,6 +122,7 @@ class Manifest:
     description: str = ""
     instructions: str = ""
     model: ModelConfig = field(default_factory=ModelConfig)
+    compaction: Compaction = field(default_factory=Compaction)
     mcp_servers: list[ServerGrant] = field(default_factory=list)
     filesystem: list[FolderGrant] = field(default_factory=list)
     file_changes: FileChanges = field(default_factory=FileChanges)
@@ -253,6 +263,16 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
     mr = r.sub("model")
     model = ModelConfig(name=mr.str("name", "", max_len=200), temperature=mr.float("temperature", 0.2, 0.0, 2.0))
 
+    cr = r.sub("compaction")
+    compaction = Compaction(
+        enabled=cr.bool("enabled", True),
+        trigger_tokens=cr.int("trigger_tokens", 100_000, 8_000, 2_000_000),
+        summary_tokens=cr.int("summary_tokens", 2_000, 200, 20_000),
+    )
+    valid = not {cr.path("trigger_tokens"), cr.path("summary_tokens")} & errors.keys()
+    if valid and compaction.summary_tokens * 4 > compaction.trigger_tokens:
+        cr.err("summary_tokens", "Keep the summary under a quarter of the size that triggers it.")
+
     servers: list[ServerGrant] = []
     seen_servers: set[str] = set()
     for i, item in enumerate(r.list("mcp_servers")):
@@ -322,6 +342,7 @@ def _parse(data: dict[str, Any], errors: dict[str, str]) -> Manifest:
         description=r.str("description", "", max_len=280),
         instructions=r.str("instructions", "", max_len=20_000),
         model=model,
+        compaction=compaction,
         mcp_servers=servers,
         filesystem=folders,
         file_changes=file_changes,

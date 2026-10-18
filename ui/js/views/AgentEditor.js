@@ -16,7 +16,7 @@ import { clone, cx, setPath } from "../lib/util.js";
 const TABS = [
   { id: "general", label: "General", icon: "id-card", owns: ["name", "description", "avatar"] },
   { id: "instructions", label: "Instructions", icon: "file-text", owns: ["instructions"] },
-  { id: "model", label: "Model", icon: "cpu", owns: ["model"] },
+  { id: "model", label: "Model", icon: "cpu", owns: ["model", "compaction"] },
   { id: "sources", label: "Data sources", icon: "server", owns: ["mcp_servers"] },
   { id: "files", label: "Files & folders", icon: "folder", owns: ["filesystem", "file_changes"] },
   { id: "schedule", label: "Schedule", icon: "clock", owns: ["schedule", "task", "notifications"] },
@@ -215,6 +215,7 @@ function InstructionsTab({ draft, set, err }) {
 function ModelTab({ draft, set, err }) {
   const models = boot.value?.models || [];
   const temp = draft.model.temperature;
+  const compaction = draft.compaction;
   return html`
     <h3>Model</h3>
     <p class="lead">Which AI model this agent thinks with.</p>
@@ -250,6 +251,51 @@ function ModelTab({ draft, set, err }) {
         onInput=${(e) => set("model.temperature", Number(e.currentTarget.value))}
       />
     <//>
+    <h3>Long tasks</h3>
+    <p class="lead">
+      Big jobs, like reading many documents, can outgrow how much the model can keep in mind at once. When that
+      happens, the agent writes itself a summary of the work so far and carries on from it.
+    </p>
+    <${SwitchRow}
+      title="Summarize when the conversation gets long"
+      help="Uses the same model. Turn off only if your model has a very large context window."
+      on=${compaction.enabled}
+      onChange=${(v) => set("compaction.enabled", v)}
+    />
+    <div class="row">
+      <${Field}
+        label="Summarize at (tokens)"
+        help="Keep this below the model's context window. A token is about ¾ of a word."
+        error=${err("compaction.trigger_tokens")}
+      >
+        <input
+          class="input"
+          type="number"
+          min="8000"
+          max="2000000"
+          step="1000"
+          disabled=${!compaction.enabled}
+          value=${compaction.trigger_tokens}
+          onInput=${(e) => set("compaction.trigger_tokens", Number(e.currentTarget.value))}
+        />
+      <//>
+      <${Field}
+        label="Summary length (tokens)"
+        help="Longer keeps more detail; shorter frees more room."
+        error=${err("compaction.summary_tokens")}
+      >
+        <input
+          class="input"
+          type="number"
+          min="200"
+          max="20000"
+          step="100"
+          disabled=${!compaction.enabled}
+          value=${compaction.summary_tokens}
+          onInput=${(e) => set("compaction.summary_tokens", Number(e.currentTarget.value))}
+        />
+      <//>
+    </div>
   `;
 }
 

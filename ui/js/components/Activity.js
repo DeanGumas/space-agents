@@ -12,6 +12,7 @@ const STEP_ICONS = {
   read_document: "file-text",
   search_document: "search",
   run_python: "square-terminal",
+  compact_context: "fold-vertical",
 };
 
 export function ActivitySteps({ calls }) {

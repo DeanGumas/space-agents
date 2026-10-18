@@ -5,6 +5,7 @@ Events emitted (see docs/architecture.md):
   message.delta  streamed answer text
   tool.started   a tool call began (shown as an activity step)
   tool.done      it finished (with a short result preview)
+                 (compacting a long conversation is shown the same way, as a "compact_context" step)
   change.updated emitted by ChangeManager for proposed changes
   message.done   final message (content, status, usage)
 """
@@ -25,6 +26,7 @@ from space_agents.core import EventBus
 from space_agents.documents.library import DocumentLibrary
 from space_agents.llm.client import ChatClient, LLMError
 from space_agents.manifest import Manifest
+from space_agents.runtime import compaction
 from space_agents.runtime.prompts import system_prompt
 from space_agents.sandbox.pyodide import PyodideSandbox
 from space_agents.store import Store, now_iso
@@ -112,6 +114,9 @@ class AgentRunner:
         text, usage, status = "", {}, "done"
         deadline = time.monotonic() + agent.limits.max_minutes * 60
         calls_left = agent.limits.max_tool_calls
+        request = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        meter = compaction.ContextMeter()
+        can_compact = agent.compaction.enabled
 
         async def on_text(delta: str) -> None:
             nonlocal text
@@ -125,6 +130,13 @@ class AgentRunner:
             client = self._client_for(config)
             while True:
                 allow_tools = calls_left > 0 and time.monotonic() < deadline
+                size = meter.size(messages)
+                if can_compact and size > agent.compaction.trigger_tokens:
+                    messages, can_compact = await self._compact(
+                        agent, message_id, client, model, messages, request, size, usage
+                    )
+                    meter.reset()
+                sent = len(messages)
                 result = await client.chat(
                     model=model,
                     messages=messages,
@@ -133,8 +145,8 @@ class AgentRunner:
                     reasoning_effort=config.reasoning_effort or None,
                     on_text=on_text,
                 )
-                for k, v in result.usage.items():
-                    usage[k] = usage.get(k, 0) + v
+                _add_usage(usage, result.usage)
+                meter.measure(result.usage.get("prompt_tokens"), sent)
                 if not result.tool_calls:
                     break
                 if text and not text.endswith("\n"):
@@ -177,6 +189,67 @@ class AgentRunner:
             self._events.emit("message.done", agent_id=agent.id, message=self._store.get_message(message_id))
             self._events.emit("agent.status", agent_id=agent.id, status="idle")
 
+    async def _compact(
+        self,
+        agent: Manifest,
+        message_id: int,
+        client: ChatClient,
+        model: str,
+        messages: list[dict[str, Any]],
+        request: str,
+        size: int,
+        usage: dict[str, int],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Summarize the earlier part of a long conversation with the agent's own model (see runtime/compaction.py).
+
+        Returns the new messages and whether compaction may be tried again in this run (not after a failure, so a
+        broken summary call isn't repeated before every model call). Shown to the user as an activity step.
+        """
+        plan = compaction.plan(messages, request)
+        if plan is None:
+            return messages, True
+        summary_tokens = agent.compaction.summary_tokens
+        args = {"tokens_before": size, "messages_summarized": plan.keep_from - 1}
+        row_id, started = self._begin_step(agent, message_id, "compact_context", args), time.monotonic()
+        try:
+            result = await client.chat(
+                model=model,
+                messages=compaction.summarizer_messages(messages[1 : plan.keep_from], summary_tokens),
+                reasoning_effort=self.config.reasoning_effort or None,
+                max_completion_tokens=summary_tokens + compaction.REASONING_HEADROOM,
+            )
+            _add_usage(usage, result.usage)
+            if not result.content.strip():
+                raise LLMError("The model returned an empty summary.")
+        except LLMError as e:
+            log.warning("Compaction failed for %s: %s", agent.id, e)
+            summary = "Couldn't summarize earlier work, so old tool results were removed instead"
+            self._end_step(agent, message_id, row_id, started, summary, f"Error: {e}", ok=False)
+            return compaction.elided(messages, plan.keep_from), False
+        new = compaction.compacted(messages, plan, result.content, summary_tokens)
+        summary = f"Summarized earlier work to free up space (~{size:,} → ~{compaction.estimate_tokens(new):,} tokens)"
+        log.info("Compacted %s: %s", agent.id, summary)
+        self._end_step(agent, message_id, row_id, started, summary, new[1]["content"], ok=True)
+        return new, True
+
+    def _begin_step(self, agent: Manifest, message_id: int, name: str, args: dict[str, Any]) -> int:
+        """Record a step (tool call or compaction) in the audit log and show it as running."""
+        cur = self._store.execute(
+            "INSERT INTO tool_calls (message_id, agent_id, name, args, summary, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, agent.id, name, json.dumps(args), _pending_summary(name, args), now_iso()),
+        )
+        self._events.emit("tool.started", agent_id=agent.id, message_id=message_id, call=self.tool_call(cur.lastrowid))
+        return cur.lastrowid
+
+    def _end_step(
+        self, agent: Manifest, message_id: int, row_id: int, started: float, summary: str, result: str, ok: bool
+    ) -> None:
+        self._store.execute(
+            "UPDATE tool_calls SET summary = ?, result = ?, status = ?, duration_ms = ? WHERE id = ?",
+            (summary, result, "done" if ok else "error", int((time.monotonic() - started) * 1000), row_id),
+        )
+        self._events.emit("tool.done", agent_id=agent.id, message_id=message_id, call=self.tool_call(row_id))
+
     async def _run_tool(self, agent: Manifest, message_id: int, tools: ToolBox, call) -> str:
         try:
             args = call.parsed_arguments()
@@ -184,13 +257,7 @@ class AgentRunner:
             args, bad_args = {}, str(e)
         else:
             bad_args = None
-        cur = self._store.execute(
-            "INSERT INTO tool_calls (message_id, agent_id, name, args, summary, started_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (message_id, agent.id, call.name, json.dumps(args), _pending_summary(call.name, args), now_iso()),
-        )
-        row_id = cur.lastrowid
-        self._events.emit("tool.started", agent_id=agent.id, message_id=message_id, call=self.tool_call(row_id))
-        started = time.monotonic()
+        row_id, started = self._begin_step(agent, message_id, call.name, args), time.monotonic()
         if bad_args:
             outcome_result, summary, ok = f"Error: {bad_args}", _pending_summary(call.name, args), False
         else:
@@ -198,11 +265,7 @@ class AgentRunner:
             outcome_result, summary, ok = outcome.result, outcome.summary, outcome.ok
         if len(outcome_result) > TOOL_RESULT_CHARS:
             outcome_result = outcome_result[:TOOL_RESULT_CHARS] + "\n…(truncated; ask for less, e.g. a page range)"
-        self._store.execute(
-            "UPDATE tool_calls SET summary = ?, result = ?, status = ?, duration_ms = ? WHERE id = ?",
-            (summary, outcome_result, "done" if ok else "error", int((time.monotonic() - started) * 1000), row_id),
-        )
-        self._events.emit("tool.done", agent_id=agent.id, message_id=message_id, call=self.tool_call(row_id))
+        self._end_step(agent, message_id, row_id, started, summary, outcome_result, ok)
         return outcome_result
 
     def tool_call(self, row_id: int) -> dict[str, Any]:
@@ -236,6 +299,11 @@ def tool_call_view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _add_usage(total: dict[str, int], usage: dict[str, int]) -> None:
+    for k, v in usage.items():
+        total[k] = total.get(k, 0) + v
+
+
 def _pending_summary(name: str, args: dict[str, Any]) -> str:
     path = Path(str(args.get("path") or "")).name
     return {
@@ -243,4 +311,5 @@ def _pending_summary(name: str, args: dict[str, Any]) -> str:
         "read_document": f"Reading {path}" if path else "Reading a document",
         "search_document": f"Searching {path}" if path else "Searching a document",
         "run_python": str(args.get("description") or "Running analysis")[:200],
+        "compact_context": "Summarizing earlier work to free up space",
     }.get(name, name)

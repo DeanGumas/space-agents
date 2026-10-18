@@ -18,6 +18,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `file_changes` | `new_files: allow\|ask`, `existing_files: ask\|allow_with_backup` (see documents-and-sandbox.md) | Files & folders |
 | `schedule`, `task` | When to run and what to do each run (task required if the schedule is on) | Schedule |
 | `notifications` | `desktop`: pop up when the agent needs approval (and, later, when a scheduled run finds something); `min_level` for runs (`info` / `action` / `urgent`) | Schedule |
+| `compaction` | `enabled`, `trigger_tokens` (8k–2M, default 100k), `summary_tokens` (200–20k, default 2k, at most a quarter of the trigger): summarize earlier work when a run gets long (architecture.md) | Model → Long tasks |
 | `memory`, `limits` | Notes between runs; per-run tool-call and time caps | Advanced |
 | `permissions.external_actions` | Reserved; always `never` in v1 | Advanced (disabled) |
 
