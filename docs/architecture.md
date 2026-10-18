@@ -41,7 +41,7 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 | `message.delta` | `agent_id, message_id, delta` | Append text to a streaming message |
 | `message.done` | `agent_id, message` | Replace with the final message; bump unread if not viewing |
 | `agent.status` | `agent_id, status` (`idle`/`responding`) | Status dot, "Responding" chip, Stop button |
-| `tool.started` / `tool.done` | `agent_id, message_id, call` | Activity step (spinner → done/failed) |
+| `tool.started` / `tool.done` | `agent_id, message_id, call` | Activity step (spinner → done/failed); also used for `compact_context` |
 | `change.updated` | `agent_id, message_id, change` | Proposed-change card (pending/applied/…) |
 | `attention.updated` | `attention` (full list) | Activity entries and the sidebar's Activity badge |
 
@@ -51,10 +51,11 @@ only after the UI calls `ui_ready`, and events emitted earlier wait in the queue
 2. `Api.send_message` validates the text, stores the user message, and stores an empty agent message with status
    `streaming`. It marks the agent busy, submits the reply to the core loop, and returns both messages immediately.
 3. With a model configured (`llm_base_url` + `api_key`), `AgentRunner.chat` (`runtime/loop.py`):
-   1. builds the system prompt and history
-   2. streams the model's answer (`message.delta`)
-   3. runs any tool calls (`tool.started`/`tool.done`, plus `change.updated` for files) and loops
-   4. saves the final text and token usage (`message.done`)
+   1. loads the agent's skills, if enabled (re-read every run), and builds the system prompt and history
+   2. compacts the conversation first if it's over the agent's threshold (see "Long runs" below)
+   3. streams the model's answer (`message.delta`)
+   4. runs any tool calls (`tool.started`/`tool.done`, plus `change.updated` for files) and loops
+   5. saves the final text and token usage (`message.done`)
 
    Without a model, `runtime/dummy.py` streams a placeholder.
 4. "Stop" cancels the run's future; the message is saved as stopped.

@@ -46,10 +46,21 @@ Local UI state (form drafts, open/closed toggles) uses `useState`.
 
 **Agent replies** render, in order: activity steps (`tool_calls`), the Markdown answer, and change cards
 (`changes`). Both lists come with `list_messages` and are kept live by the `tool.started`/`tool.done` and
-`change.updated` events. While an agent is responding, the composer's Send button becomes **Stop**.
+`change.updated` events. Besides tool calls, the steps include `compact_context` ("Summarized earlier work…") when
+a long run was compacted. While an agent is responding, the composer's Send button becomes **Stop**.
 
 The **agent editor** edits a draft copy and saves through `saveAgent()`. A failed save puts `ApiError.fields` into
 the editor's `errors` and jumps to the first tab with an error. Closing with unsaved changes asks for confirmation.
+
+Editor tabs and what they own (`TABS` in `AgentEditor.js`, which also routes errors to the right tab):
+- **General:** name, description, avatar.
+- **Instructions:** instructions, plus **Skills** (switch, folder picker, and a preview of the skills found via
+  `list_skills`).
+- **Model:** model, creativity, plus **Long tasks** (compaction switch, trigger, and summary length).
+- **Data sources:** MCP servers.
+- **Files & folders:** folders and the file-change policy.
+- **Schedule:** schedule, task, and notifications.
+- **Advanced:** limits, memory, JSON, and delete.
 
 ## Sidebar and menus
 
@@ -105,5 +116,9 @@ packaging.
 - **Avatars and icons:** use the `Avatar` and `Icon` components.
 - **Errors:** show them with `toast`/`toastError`. Don't use `alert`/`confirm`/`prompt` (unreliable in webviews);
   use inline UI like the delete button's two-step confirm or the change card's Discard box.
+- **Permissions are confirmed natively, not in the page.** Anything that widens an agent's reach (new folders,
+  Read & write, a skills folder, server addresses) is checked by Python, which raises a native dialog or requires
+  the native folder picker. A page-side confirm would defeat the purpose, because the page is the thing we don't
+  trust (architecture.md). Folder and skills-folder inputs only take values from `call("pick_folder")`.
 - **Wording:** user-facing copy is written for non-technical users, e.g. "Creativity" rather than "temperature",
   and "Data sources" rather than "MCP servers".

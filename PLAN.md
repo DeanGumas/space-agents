@@ -211,8 +211,8 @@ Layout (Slack-style):
   - ✅ **Right-click an agent:** Edit agent, or Duplicate (copies its setup as "<name> (Clone)").
 - **Channel view:** a single timeline mixing chat messages and run-report cards. Tool calls are collapsed by default
   ("▸ 6 tool calls") and expand to show server/tool, arguments, duration, and a truncated result.
-- **Agent settings drawer:** form-based manifest editor (Basics, Instructions, Model, Data sources, Files, Schedule,
-  Notifications), with an "Advanced: view JSON" tab.
+- **Agent settings drawer:** form-based manifest editor (Basics, Instructions + ✅ Skills, Model + ✅ Long tasks,
+  Data sources, Files, Schedule, Notifications), with an "Advanced: view JSON" tab.
 - **Attachments:** a paperclip button in the composer and drag-and-drop anywhere on the channel (§2.11). Attached
   files show as chips with type icon, name, size, page count, and reading progress.
 - **Proposed-change cards:** "📊 Updated PO Tracker.xlsx: 3 rows added [Review] [Apply] [Discard]", with a review
@@ -651,8 +651,9 @@ Steps:
 
 1. **Assemble context:** base system prompt (safety rules, how to use tools, how to cite sources, today's date/time,
    user's timezone) + manifest `instructions` + a description of granted sources + memory notes + summaries of the last
-   N run reports (so the agent knows what it already reported). Built today: the system prompt plus the last 20
-   messages, with each earlier reply annotated with the outcome of its proposed file changes (§2.10).
+   N run reports (so the agent knows what it already reported). Built today: the system prompt (including the file
+   types the agent may save and, with skills on, each skill's name and description) plus the last 20 messages. Each
+   earlier reply is annotated with the outcome of its proposed file changes (§2.10).
 2. **Call model** with streaming and the agent's tool list.
 3. **Execute tool calls** (independent calls in parallel, with a concurrency cap), record each one in the audit log,
    append results, and loop.
@@ -829,16 +830,19 @@ space-agents/
     store.py                   # agents/*.json, avatars, SQLite schema + migrations + query helpers
     manifest.py                # dataclasses + validation
     catalog.py                 # tool-server catalog (dev file for now) + agent templates
+    skills.py                  # agent skills: find SKILL.md folders, parse headers, what use_skill returns
     changes.py                 # proposed changes: stage, supersede, apply/discard/undo, conflicts, file history
     llm/client.py              # OpenAI-compatible chat (streaming, tools, param-compat, retries)
     runtime/
       loop.py                  # AgentRunner: the tool-calling loop, history (with change outcomes), events
-      prompts.py               # system prompt
+      prompts.py               # system prompt (+ skills list)
+      compaction.py            # summarize the earlier part of long runs (§3.2 step 6)
       dummy.py                 # placeholder replies when no model is configured
       scheduler.py             # (planned) intervals, active hours, jitter, missed-run handling
     tools/
       registry.py              # tool specs + execution; run_python guardrails; xlsx diff/repair script
-      access.py                # FolderAccess: realpath containment, deny-list, read vs write
+      access.py                # FolderAccess: realpath containment, deny-list, read vs write, write-protected
+                               #   locations, allowed file types, read-only skill folders
       builtin.py               # (planned) post_report, remember, recall, current_time
     documents/
       extract.py               # PDF (pypdfium2) / DOCX / XLSX / PPTX / text → pages, page classification
@@ -850,15 +854,17 @@ space-agents/
     attachments.py             # (planned) snapshot dropped/uploaded files, pre-extract
     platform/
       appearance.py            # OS dark mode, open folder in Finder/Explorer
-      autostart.py, notify.py, single_instance.py   # (planned)
+      notify.py                # desktop notifications (osascript / PowerShell toast / notify-send)
+      marking.py               # mark files agents write as downloaded (Mark of the Web / macOS quarantine)
+      autostart.py, single_instance.py   # (planned)
   ui/
     index.html                 # CSP + import map
     css/tokens.css, app.css
     js/
       main.js, app.js, api.js, state.js
       sandbox.js               # main-thread side of the sandbox (owns the Web Worker)
-      views/                   # Sidebar, Channel, AgentEditor, SettingsDialog, Welcome (+ Activity placeholder)
-      components/              # common.js, AvatarPicker.js, Activity.js (steps + change cards + deny box)
+      views/                   # Sidebar, Channel, Activity, AgentEditor, SettingsDialog, Welcome
+      components/              # common.js, AvatarPicker.js, ContextMenu.js, Activity.js (steps + change cards)
       lib/                     # theme, markdown, emoji, util
     sandbox/worker.js          # Pyodide Web Worker: load packages, copy-in, run, copy-out
     vendor/                    # preact, htm, signals, marked, purify, lucide/ (committed, hashed)
@@ -870,7 +876,8 @@ space-agents/
   dev/
     catalog.json               # offline stand-in for GET /mcp
     make_sample_docs.py        # realistic test documents (also used as test fixtures)
-  tests/                       # pytest: unit, bridge, loop (scripted model + fake sandbox), static UI checks
+  tests/                       # pytest: unit, bridge (fake native window), loop (scripted model + fake sandbox),
+                               #   compaction, skills, static UI checks
   packaging/                   # (planned) PyInstaller spec, Inno Setup script, macOS Info.plist/icons
   .github/workflows/           # (planned) ci.yml, release.yml
 ```
@@ -932,6 +939,24 @@ webview.
 - The UI is served by our own small WSGI app instead of pywebview's static server (needed for the worker CSP header
   and the sandbox routes).
 - There's no `ExecutionBackend` abstraction yet; `PyodideSandbox` is the only backend.
+
+### Progress (2026-10-18): security hardening, long runs, and skills
+
+Built since the 10-05 slice (126 automated tests):
+- **Approvals:** the Activity inbox, desktop notifications, a resizable sidebar, and Duplicate agent.
+- **The bridge doesn't trust the page** (§4.5). New folders and skills folders must come from the native picker.
+  Write access, auto-applying changes, and new server addresses need OK in a native dialog.
+- **Safer writes** (§4.1). Agents can't save into system, app-settings, autostart, or hidden folders. Only allowed
+  file types can be saved: documents, data, and images, plus `extra_file_types`; program launchers never. Saved
+  files are marked as downloaded (Protected View in Office).
+- **Compaction** (§3.2 step 6). Long runs summarize their earlier work with the agent's own model, at a per-agent
+  token threshold and summary length.
+- **Skills** (§2.7). Each agent can have a folder of standard `SKILL.md` skills, loaded on demand with `use_skill`
+  and read-only for agents.
+
+Verified live with gpt-5-nano: the compaction summary call (length and reasoning headroom), and an agent choosing a
+skill and following its template. Still to verify on Windows: the native dialogs, Mark of the Web, and the
+`AppData`/`ProgramData` write blocks.
 
 ### Phase 1: Chat with an agent
 - ⬜ Onboarding:
@@ -1004,6 +1029,7 @@ the file, and Undo restores the old version. ✅ Met.
 - Scheduler (intervals, active hours, weekdays, jitter, missed-run catch-up, concurrency cap) plus "Run now".
 - `task` field, `post_report`, report cards, Activity inbox, unread badges, sidebar status/snippets.
 - Memory (`remember`/`recall`) and recent-run context.
+- ✅ (pulled forward) **Compaction** for long runs (§3.2 step 6). Scheduled runs use the same loop, so they get it too.
 - ✅ (pulled forward) **Desktop notifications** for approvals: "<agent> requests approval" plus a one-sentence
   summary. They're skipped when you're viewing that agent, and respect the agent's toggle. macOS uses `osascript`,
   Windows a PowerShell toast (untested on Windows yet).
@@ -1055,12 +1081,17 @@ delays with suggested next actions.
 
 ## 9. Testing strategy
 
-**Built** (`pytest`, 86 tests, no window or network needed):
+**Built** (`pytest`, 126 tests, no window or network needed):
 - **Unit tests:**
   - manifest validation
   - config layers and `.env` parsing
   - store and migrations
   - folder policy: traversal, symlinks, deny-list, read vs write
+  - write safety: autostart/app-settings/hidden folders, cloud-drive exceptions, allowed and never-allowed file
+    types, Windows device names, `extra_file_types`
+  - file marking (macOS quarantine attribute on applied changes; on/off setting)
+  - compaction: what's summarized vs. kept, tool-call pairs never split, the summary cap, the fallback, the meter
+  - skills: `SKILL.md` header parsing, folder layouts, symlinks, problems, `use_skill` output, read-only skill folders
   - document extraction (text PDF, scanned page, DOCX, XLSX with dates, PPTX, unsupported/corrupt)
   - cache and FTS5 search (extract once per version, rename detection, page ranges)
   - proposed changes: auto-apply policy, apply, undo, conflicts, discard, retention
@@ -1082,7 +1113,12 @@ delays with suggested next actions.
   - no-op detection
   - superseding revisions
   - change outcomes in history
-- **Bridge:** the same calls the UI makes (agents CRUD, avatars, chat, discard with feedback).
+  - disallowed file types not saved; `extra_file_types` allowing more
+  - compaction with the agent's model, the fallback when it fails, and turning it off
+  - an agent loading a skill and reading the skill's files; no skill tool when skills are off
+- **Bridge:** the same calls the UI makes (agents CRUD, avatars, chat, discard with feedback). A fake native window
+  covers the permission rules: folders and skills folders only from the picker, write access and server addresses
+  only after a native OK, Read & write refused on sensitive folders, and `list_skills` only for known folders.
 - **Static UI checks:**
   - the CSP hash matches the import map
   - vendored files match the lock
@@ -1139,6 +1175,11 @@ delays with suggested next actions.
 | Models | Large open models (e.g. Inkling Large, GLM 5.3) with up to 1M context. For testing: OpenAI `gpt-5-nano` via `.env`. The first entry in the model list is the default for agents without one |
 | Endpoints | `llm_base_url` and `mcp_base_url` configured separately: build defaults → remote config → user override |
 | Code signing | Handled with IT/Security once a working build exists |
+| Page trust | The webview page is assumed compromisable: permission changes (new folders, write access, server addresses, skills folders) need native UI the page can't script (§4.5) |
+| Agent file writes | Never into system, app-settings, autostart, or hidden folders; allow-listed file types (configurable via `extra_file_types`, never launchers); files marked as downloaded (§4.1) |
+| Sandbox network | None. `connect-src 'self'`, vendored packages only. "Download-only" access was considered and rejected: a GET can carry data in its URL, so only a host allow-list would actually stop leaks |
+| Long runs | Per-agent compaction with the agent's own model, at a token threshold, keeping the latest round verbatim (§3.2 step 6) |
+| Skills | Standard `SKILL.md` folders, per agent, loaded on demand with `use_skill`; read-only for agents; folder chosen in the native picker |
 | Git | The maintainer makes commits; tooling/assistants don't commit |
 
 ### Still open
@@ -1154,8 +1195,11 @@ delays with suggested next actions.
 4. **Context length in `/api/models`:** does the gateway expose each model's `max_model_len`? If not, a small
    per-model override map in the remote config works.
 5. **License:** Apache-2.0 (includes a patent grant, common for org-backed projects) or MIT.
-6. **Sandbox on Windows:** run `--sandbox-selftest` in WebView2. On macOS (WKWebView) all checks pass, cold start is
-   ~3 s, and we serve the UI from our own WSGI app.
+6. **Windows verification:** run `--sandbox-selftest` in WebView2. On macOS (WKWebView) all checks pass, cold start
+   is ~3 s, and we serve the UI from our own WSGI app. Also check the native confirmation dialogs (MessageBox from a
+   bridge thread), the `Zone.Identifier` marking, and the `AppData`/`ProgramData` write blocks.
+8. **Sandbox process isolation:** the sandbox worker shares the page's renderer process, so a browser-engine bug
+   could reach the bridge. Option: run it in a separate window or origin with no bridge (§4.5).
 7. **FTS5 availability:** ✅ confirmed on macOS (uv's CPython 3.12, SQLite 3.53.1). Still to confirm on Windows; if
    missing, fall back to a simple LIKE scan.
 

@@ -5,11 +5,11 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
 | Doc | What it covers |
 |---|---|
 | [development.md](development.md) | Setup, running the app, tests, smoke test, troubleshooting |
-| [architecture.md](architecture.md) | Processes and threads, the JS ↔ Python bridge, events, code map |
-| [configuration.md](configuration.md) | Config layers, `.env`, environment variables, baking in URLs for releases |
-| [agents.md](agents.md) | Agent manifests, storage on disk, avatars, templates, the server catalog |
+| [architecture.md](architecture.md) | Processes and threads, the JS ↔ Python bridge, events, what the page is trusted with, long-run compaction, code map |
+| [configuration.md](configuration.md) | Config layers, `.env`, environment variables (incl. file-safety settings), baking in URLs for releases |
+| [agents.md](agents.md) | Agent manifests, storage on disk, avatars, templates, skills, the server catalog |
 | [ui.md](ui.md) | Front-end structure (Preact + htm, no build), state, theming, icons, CSP, vendoring |
-| [documents-and-sandbox.md](documents-and-sandbox.md) | Agent tools, local document reading, the Pyodide sandbox, proposed changes |
+| [documents-and-sandbox.md](documents-and-sandbox.md) | Agent tools, local document reading, the Pyodide sandbox, where agents may write and what, proposed changes |
 
 ## Status
 
@@ -26,6 +26,10 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - compaction of long runs ([architecture.md](architecture.md))
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
+- **Security hardening:**
+  - the bridge doesn't trust the page with permissions ([architecture.md](architecture.md))
+  - agents can't save into system, autostart, or hidden folders, or save program files, and their files are
+    marked as downloaded ([documents-and-sandbox.md](documents-and-sandbox.md))
 - **Not yet built:**
   - MCP/OpenAPI servers
   - attachments (drag-and-drop)

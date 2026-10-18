@@ -60,6 +60,11 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
   flows are tested without network or a webview. `tests/conftest.py` provides the `sample_docs` fixture.
 - **`tests/test_ui.py`** catches the common front-end breakages without a browser: CSP hash drift, missing vendored
   files, broken relative imports, unknown icon names, and templates referencing unknown servers.
+- **Bridge tests** (`tests/test_bridge.py`) attach a `FakeWindow` for the native folder picker and confirmation
+  dialogs. Set `next_folder` to "pick" a folder and `answer` to approve or decline, and check `asked` to see what
+  the user would have been asked.
+- **`tests/test_compaction.py`** and **`tests/test_skills.py`** cover the compaction helpers and skill discovery and
+  parsing. The loop tests cover both end to end.
 
 ## Common tasks
 
@@ -73,6 +78,9 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 | Add a tool for agents | Add its spec to `TOOL_SPECS` and a branch in `ToolBox.call` (`tools/registry.py`); return a `ToolOutcome` with a plain-language `summary`; resolve paths with `self.access` |
 | Change agent behavior | System prompt in `runtime/prompts.py`; for small models, instructions inside tool results (registry) work better |
 | Allow a new sandbox package | See "Third-party front-end assets" above (`PYODIDE` in `scripts/vendor.py`) |
+| Add a skill to test with | Make a folder with `<skill>/SKILL.md` (`---` header with `name` and `description`), then Instructions → Skills → Enable and pick it (agents.md) |
+| Let agents save another file type | `SPACE_AGENTS_EXTRA_FILE_TYPES=.py,.cpp` in `.env`; launchers like `.exe` stay blocked (`NEVER_FILE_TYPES` in `tools/access.py`) |
+| Test compaction without a huge document | Set the agent's "Summarize at" low (min 8,000) and have it read a few long files. The step appears as "Summarized earlier work…" |
 | Test a live model cheaply | `gpt-5-nano` with `SPACE_AGENTS_REASONING_EFFORT=low`; a document task is ~10–40k tokens. Check "Usage for" in the log |
 
 ## Troubleshooting
@@ -89,5 +97,16 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 - **No desktop notifications on macOS:** until the app is packaged, they're sent via `osascript` and attributed to
   "Script Editor". Allow notifications for Script Editor in System Settings → Notifications. The log shows
   "Desktop notification sent: …" for each one.
+- **"Not saved. Agents can't save .xyz files":** that file type isn't allowed. Add it with
+  `SPACE_AGENTS_EXTRA_FILE_TYPES` if it's safe (documents-and-sandbox.md).
+- **"…is a system, app-settings, or hidden location":** agents can't save into `~/Library`, `AppData`, system
+  folders, or hidden folders, even with Read & write. Point the agent at a regular folder.
+- **Office shows "Enable Editing" on files an agent changed:** that's the Mark of the Web
+  (`SPACE_AGENTS_MARK_AGENT_FILES`, on by default). Click Enable Editing, or turn the setting off.
+- **"Add this folder with the Add folder… button" when saving an agent:** folders, including the skills folder,
+  must come from the native picker. Typing or pasting a path (or an edited manifest JSON) doesn't count.
+- **A skill doesn't show up:** the editor's Skills section lists problems. Usually a `SKILL.md` has no
+  `description`, or two skills share a name. On macOS, hidden folders like `~/.claude/skills` need ⌘⇧. in the
+  picker.
 - **macOS log noise like `NSWindow warning: adding an unknown subview: <WKInspectorWKWebView>`:** harmless. It
   appears when the web inspector opens.
