@@ -62,8 +62,9 @@ editor's Schedule tab. Scheduled runs show a "Scheduled run" chip on their repor
 **Runs.** **Run now** in the channel header (`runAgent()` → `run_agent`) is disabled, with a tooltip, until the
 agent has a task and a model is configured.
 - **While it works:** the run's message shows a "Run" chip and its activity steps.
-- **When done:** it renders `RunReport` (`components/Report.js`), with a summary, then findings by level (urgent /
-  action needed / info) with suggested actions and source chips.
+- **When done:** it renders `RunReport` (`components/Report.js`), with a summary, then new and changed findings
+  by level (urgent / action needed / info) with suggested actions and source chips. "Changed" findings get a tag.
+  Findings marked `unchanged` (already reported) follow as a dimmed "Still open (reported before)" list.
 - **Sanitizing:** item details are model output and go through `renderMarkdown`.
 
 The **agent editor** edits a draft copy and saves through `saveAgent()`. A failed save puts `ApiError.fields` into
@@ -77,7 +78,8 @@ Editor tabs and what they own (`TABS` in `AgentEditor.js`, which also routes err
 - **Data sources:** MCP servers.
 - **Files & folders:** folders and the file-change policy.
 - **Schedule:** schedule, task, and notifications.
-- **Advanced:** limits, memory, JSON, and delete.
+- **Advanced:** limits, the memory switch with the agent's notes (`MemoryNotes`: delete one, or all, with a
+  two-step confirm; notes are agent-written, so plain text), JSON, and delete.
 
 ## Sidebar and menus
 
@@ -90,9 +92,13 @@ Editor tabs and what they own (`TABS` in `AgentEditor.js`, which also routes err
 - **Context menus:** call `openContextMenu(event, {title, items})` from state.js. `<ContextMenu>` in `app.js` renders
   one menu at a time, keeps it on screen, supports arrow keys and Escape, and closes on outside click, scroll, or
   resize. Right-clicking an agent offers **Edit agent** and **Duplicate**.
-- **Activity:** the `attention` signal (from `bootstrap` and `attention.updated`) drives the Activity tab (one entry per
-  agent, with its change cards) and the red count badge on the Activity nav item (hidden at 0). "Open conversation"
-  calls `openChange()`, which opens the agent and scrolls to and flashes the card.
+- **Activity:** the `attention` signal (from `bootstrap` and `attention.updated`) drives the Activity tab and the red
+  count badge on the Activity nav item (hidden at 0).
+  - **Entries:** one per agent, with its report notices (`ReportNotice`) and change cards.
+  - **Opening:** "Open conversation" calls `openChange()` or `openReport()`, which open the agent and scroll to and
+    flash the card or report (`focusTarget` holds the element id, `change-…` or `msg-…`).
+  - **Seen:** `selectAgent` tells Python the user saw the agent's reports (`mark_reports_seen`), and Dismiss calls
+    `dismiss_report`. `init()`'s automatic first selection doesn't mark anything seen.
 - **Focus reporting:** `state.js` calls `set_ui_state(focused, viewing)` on window focus/blur/visibility changes and
   when the open conversation changes, so Python can skip desktop notifications you'd see anyway.
 - **Keyboard shortcuts:** Ctrl/⌘ N new agent · Ctrl/⌘ , settings · Ctrl/⌘ B collapse sidebar.

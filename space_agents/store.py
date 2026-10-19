@@ -149,6 +149,24 @@ SCHEMA = [
     """
     ALTER TABLE schedule_state ADD COLUMN jitter_seconds INTEGER;
     """,
+    # v6: agent memory: short notes an agent keeps between runs and chats (memory.py)
+    """
+    CREATE TABLE agent_memory (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id    TEXT NOT NULL,
+        key         TEXT NOT NULL,
+        note        TEXT NOT NULL,
+        message_id  INTEGER,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        UNIQUE (agent_id, key)
+    );
+    """,
+    # v7: whether the user has seen a run's report (Activity lists notable unseen ones). Earlier runs count as seen.
+    """
+    ALTER TABLE runs ADD COLUMN seen_at TEXT;
+    UPDATE runs SET seen_at = COALESCE(finished_at, created_at);
+    """,
 ]
 
 
@@ -258,6 +276,7 @@ class Store:
             self._db.execute("DELETE FROM messages WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM runs WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM schedule_state WHERE agent_id = ?", (agent_id,))
+            self._db.execute("DELETE FROM agent_memory WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM tool_calls WHERE agent_id = ?", (agent_id,))
             self._db.execute("DELETE FROM changes WHERE agent_id = ? AND status = 'pending'", (agent_id,))
 
@@ -377,6 +396,29 @@ class Store:
             return {}
         rows = self.query(f"SELECT * FROM runs WHERE id IN ({','.join('?' * len(run_ids))})", tuple(run_ids))
         return {r["id"]: run_view(r) for r in rows}
+
+    def recent_runs(self, agent_id: str, limit: int = 5, before_id: int | None = None) -> list[dict[str, Any]]:
+        """The agent's latest finished runs that have a report, newest first (for the next run's context)."""
+        rows = self.query(
+            "SELECT * FROM runs WHERE agent_id = ? AND status = 'done' AND report IS NOT NULL AND id < ?"
+            " ORDER BY id DESC LIMIT ?",
+            (agent_id, before_id if before_id is not None else 2**62, limit),
+        )
+        return [run_view(r) for r in rows]
+
+    def unseen_runs(self) -> list[dict[str, Any]]:
+        """Finished runs (with a report or failed) the user hasn't looked at yet, oldest first."""
+        rows = self.query("SELECT * FROM runs WHERE seen_at IS NULL AND status IN ('done', 'error') ORDER BY id")
+        return [run_view(r) for r in rows]
+
+    def mark_runs_seen(self, agent_id: str, run_id: int | None = None) -> int:
+        """Mark an agent's finished runs (or just one) as seen. Returns how many changed."""
+        sql = "UPDATE runs SET seen_at = ? WHERE agent_id = ? AND seen_at IS NULL AND status IN ('done', 'error')"
+        params: tuple = (now_iso(), agent_id)
+        if run_id is not None:
+            sql += " AND id = ?"
+            params += (run_id,)
+        return self.execute(sql, params).rowcount
 
     def attach_runs(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Add each message's run (or None) as `run`, for the UI's report cards."""

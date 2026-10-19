@@ -1,4 +1,5 @@
-// The report card a run delivers (post_report): summary, then findings by level with suggested actions and sources.
+// The report card a run delivers (post_report): summary, then new/changed findings by level with suggested actions
+// and sources, then findings already reported before ("still open") as a compact, dimmed list.
 // Item details are model output, so they go through renderMarkdown (DOMPurify) like every other agent text.
 
 import { html } from "htm/preact";
@@ -14,6 +15,8 @@ const LEVELS = {
 
 export function RunReport({ run }) {
   const report = run.report;
+  const fresh = report.items.filter((i) => i.change !== "unchanged");
+  const stillOpen = report.items.filter((i) => i.change === "unchanged");
   return html`
     <div class="report-card">
       <div class="report-head">
@@ -22,11 +25,22 @@ export function RunReport({ run }) {
         <span class="trigger">${run.trigger === "schedule" ? "Scheduled" : "Run now"}</span>
       </div>
       <div class="report-summary">${report.summary}</div>
-      ${report.items.length === 0
+      ${fresh.length === 0
         ? html`<div class="report-empty">Nothing new to report.</div>`
         : html`<ul class="report-items">
-            ${report.items.map((item) => html`<${ReportItem} item=${item} />`)}
+            ${fresh.map((item) => html`<${ReportItem} item=${item} />`)}
           </ul>`}
+      ${stillOpen.length > 0 &&
+      html`<div class="report-still-open">
+        <div class="label">Still open (reported before)</div>
+        <ul>
+          ${stillOpen.map(
+            (item) => html`<li title=${item.detail}>
+              <${Icon} name=${(LEVELS[item.level] || LEVELS.info).icon} size="sm" /> ${item.title}
+            </li>`,
+          )}
+        </ul>
+      </div>`}
     </div>
   `;
 }
@@ -38,6 +52,7 @@ function ReportItem({ item }) {
       <div class="report-item-head">
         <span class="level"><${Icon} name=${level.icon} size="sm" /> ${level.label}</span>
         <span class="title">${item.title}</span>
+        ${item.change === "changed" && html`<span class="chip accent">Changed</span>`}
       </div>
       ${item.detail && html`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(item.detail) }}></div>`}
       ${item.suggested_actions.length > 0 &&

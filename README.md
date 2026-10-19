@@ -22,15 +22,18 @@ each has a plain-English manifest, chosen data sources, folder access, and an op
 - **Schedules:** agents run on their own, e.g. every hour on weekdays from 7 to 6, while the app is open. Missed
   runs (computer asleep, app closed) catch up once, however long you were away, one agent at a time. The header
   shows "Next run 10:07".
-- **Approvals:** an Activity inbox and desktop notifications for anything waiting on you.
+- **Memory:** agents keep short notes between runs and chats (which you can see and delete). Each run knows what
+  it reported before, so repeats show as "still open" instead of new.
+- **Notifications and Activity:** a desktop notification and an Activity inbox entry when a run finds something
+  new or changed at the agent's alert level (or fails), and whenever a change waits for your approval. Things it
+  already reported don't alert again.
 - **Skills:** give an agent a folder of standard `SKILL.md` skills (e.g. `~/.claude/skills`). It loads the right one
   when a task calls for it.
 - **Long tasks:** when a run gets long, the agent summarizes its earlier work so it doesn't overflow the model's
   context window. The threshold and summary length are set per agent.
 
-**Not yet:** MCP/OpenAPI servers, drag-and-drop attachments, memory between runs and report notifications (next),
-running in the background with the window closed, rooms (group chats, designed in PLAN.md §3.5), onboarding (the API key is in `.env`
-for now), and installers.
+**Not yet:** MCP/OpenAPI servers, drag-and-drop attachments, running in the background with the window closed, rooms
+(group chats, designed in PLAN.md §3.5), onboarding (the API key is in `.env` for now), and installers.
 
 ## Security in brief
 

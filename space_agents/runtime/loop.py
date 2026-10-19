@@ -26,6 +26,7 @@ from space_agents.core import EventBus
 from space_agents.documents.library import DocumentLibrary
 from space_agents.llm.client import ChatClient, LLMError
 from space_agents.manifest import Manifest
+from space_agents.memory import AgentMemory, prompt_notes
 from space_agents.runtime import compaction
 from space_agents.runtime.prompts import run_request, system_prompt
 from space_agents.runtime.reports import POST_REPORT_SPEC, fallback_report, report_markdown
@@ -45,6 +46,7 @@ CHANGE_OUTCOMES = {
     "undone": "applied, then undone by the user",
 }
 TOOL_RESULT_CHARS = 12_000
+RECENT_RUNS = 5  # earlier reports shown to a run, so it reports what's new instead of repeating itself
 REPORT_NUDGE = "(Now call post_report with your findings: a one-line summary and the items. Don't reply in text.)"
 
 
@@ -119,6 +121,8 @@ class AgentRunner:
         skills = load_skills(agent.skills.folder) if agent.skills.enabled else SkillSet()
         for problem in skills.problems:
             log.warning("Skills for %s: %s", agent.id, problem)
+        memory = AgentMemory(self._store, agent.id) if agent.memory.enabled else None
+        recent_runs = self._store.recent_runs(agent.id, RECENT_RUNS, before_id=run["id"]) if run else None
         tools = ToolBox(
             agent=agent,
             message_id=message_id,
@@ -129,10 +133,21 @@ class AgentRunner:
             extra_file_types=config.extra_file_types,
             skills=skills,
             run=run is not None,
+            memory=memory,
+            recent_runs=recent_runs,
         )
-        system = {"role": "system", "content": system_prompt(agent, tools.access, skills, run=run is not None)}
+        prompt = system_prompt(
+            agent,
+            tools.access,
+            skills,
+            run=run is not None,
+            notes=prompt_notes(memory) if memory else None,
+            recent_runs=recent_runs,
+        )
+        system = {"role": "system", "content": prompt}
         if run:
-            messages: list[dict[str, Any]] = [system, {"role": "user", "content": run_request(run["task"])}]
+            request = run_request(run["task"], memory=memory is not None)
+            messages: list[dict[str, Any]] = [system, {"role": "user", "content": request}]
         else:
             messages = [system, *self._history(agent.id, message_id)]
         text, usage, status, stopped, nudged = "", {}, "done", False, False
@@ -194,6 +209,7 @@ class AgentRunner:
                         ],
                     }
                 )
+                tools.final_round = not allow_tools or nudged
                 for call in result.tool_calls:
                     calls_left -= 1
                     content = await self._run_tool(agent, message_id, tools, call)
@@ -355,4 +371,7 @@ def _pending_summary(name: str, args: dict[str, Any]) -> str:
         "compact_context": "Summarizing earlier work to free up space",
         "use_skill": f"Using the {args['name']} skill" if args.get("name") else "Using a skill",
         "post_report": "Writing the report",
+        "remember": f"Noting “{args.get('key') or ''}”",
+        "recall": f"Looking through its notes for “{args.get('query') or ''}”",
+        "forget": f"Forgetting “{args.get('key') or ''}”",
     }.get(name, name)

@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,8 @@ class ChangeManager:
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.history_dir.mkdir(parents=True, exist_ok=True)
         self._revising: set[str] = set()  # agents revising after the user discarded a change with feedback
+        # Other things waiting on the user, merged into attention(): agent_id -> run reports (runtime/notices.py).
+        self.extra_attention: Callable[[], dict[str, list[dict[str, Any]]]] | None = None
 
     # --- queries ------------------------------------------------------------------------------------------------
 
@@ -240,9 +243,10 @@ class ChangeManager:
     # --- "needs your attention" (Activity tab, sidebar badge) -----------------------------------------------------
 
     def attention(self) -> list[dict[str, Any]]:
-        """One entry per agent waiting on the user: it has unapplied proposals, or it's revising after feedback.
+        """One entry per agent waiting on the user: it has unapplied proposals, it's revising after feedback, or
+        (through `extra_attention`) it has notable run reports the user hasn't seen.
 
-        An entry disappears once nothing is pending and the agent has finished working.
+        An entry disappears once nothing is pending, the agent has finished working, and its reports were seen.
         """
         rows = self._store.query(
             "SELECT * FROM changes WHERE status IN ('pending', 'conflicted') ORDER BY created_at, rowid"
@@ -254,8 +258,13 @@ class ChangeManager:
             entry["updated_at"] = max(entry["updated_at"], r["updated_at"])
         for agent_id in self._revising:
             entries.setdefault(agent_id, {"agent_id": agent_id, "changes": [], "updated_at": now_iso()})
+        for agent_id, reports in (self.extra_attention() if self.extra_attention else {}).items():
+            entry = entries.setdefault(agent_id, {"agent_id": agent_id, "changes": [], "updated_at": ""})
+            entry["reports"] = reports
+            entry["updated_at"] = max(entry["updated_at"], *(r["finished_at"] or "" for r in reports))
         for entry in entries.values():
             entry["revising"] = entry["agent_id"] in self._revising
+            entry.setdefault("reports", [])
         return sorted(entries.values(), key=lambda e: e["updated_at"], reverse=True)
 
     def set_revising(self, agent_id: str, revising: bool) -> None:

@@ -86,6 +86,8 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 | Add a skill to test with | Make a folder with `<skill>/SKILL.md` (`---` header with `name` and `description`), then Instructions → Skills → Enable and pick it (agents.md) |
 | Let agents save another file type | `SPACE_AGENTS_EXTRA_FILE_TYPES=.py,.cpp` in `.env`; launchers like `.exe` stay blocked (`NEVER_FILE_TYPES` in `tools/access.py`) |
 | Try a schedule | Edit → Schedule → Run automatically, "Every 5 minutes", and active hours covering now. The header shows "Next run …" (up to ±5 minutes off the scheduled time; set `SPACE_AGENTS_SCHEDULE_JITTER_MINUTES=0` to test exact times). Leave the app open; each run posts a report card. The log shows "Scheduled run of <agent> (on time)" |
+| Try report notifications | Give an agent a task whose report will have an "action needed" finding (the default minimum level), click **Run now**, then switch to another agent or app. A notification arrives ("<agent>: action needed"), and the report waits in Activity until you open the agent or dismiss it. A second identical run shows the finding as "still open", and doesn't notify |
+| Try memory and dedupe | Run the same task twice with **Run now**. The first report lists findings as new; the second should show them under "Still open". If it labelled them new, an activity step "Checked the report against earlier runs" shows the one-time question. The agent's notes are in Edit → Advanced |
 | Try a run | Give an agent a task (Edit → Schedule; the schedule can stay off) and a folder, e.g. `dev/sample-docs` with "Compare the supplier updates with PO Tracker.xlsx and report POs that need attention". Click **Run now**. Send a chat message meanwhile to see it queue |
 | Test compaction without a huge document | Set the agent's "Summarize at" low (min 8,000) and have it read a few long files. The step appears as "Summarized earlier work…" |
 | Test a live model cheaply | `gpt-5-nano` with `SPACE_AGENTS_REASONING_EFFORT=low`; a document task is ~10–40k tokens. Check "Usage for" in the log |
@@ -115,6 +117,13 @@ With the sample `.env`, data lives in `./.devdata/` (git-ignored). Delete that f
 - **A skill doesn't show up:** the editor's Skills section lists problems. Usually a `SKILL.md` has no
   `description`, or two skills share a name. On macOS, hidden folders like `~/.claude/skills` need ⌘⇧. in the
   picker.
+- **An agent keeps reporting the same thing as new:** check that it has memory on and that earlier runs finished
+  with a report (only finished runs count as "recent runs"). Repeats are labelled, not removed: they show under
+  "Still open" on the card.
+- **A run finished but nothing popped up:** that's expected unless the report has a *new or changed* finding at or
+  above the agent's minimum level (Edit → Schedule → notifications), or the run failed. It's also skipped if you were
+  watching that agent, or its desktop notifications are off. Without notable findings, a run that left file changes
+  still sends "requests approval". The log shows "Desktop notification sent: …".
 - **A scheduled agent didn't run:** the app must be open and the computer awake. The log says why a slot was
   skipped: "Skipping missed run" (back after the slot, and either outside active hours or catch-up off),
   "previous one is still going", or "no model is configured". Runs beyond `max_concurrent_runs` wait as "queued".

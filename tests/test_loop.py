@@ -469,7 +469,7 @@ async def test_a_run_does_the_task_and_ends_with_its_report(env, tmp_path):
     first = client.requests[0]
     assert [m["role"] for m in first["messages"]] == ["system", "user"]
     assert "This is a run, not a chat" in first["messages"][0]["content"]
-    assert first["messages"][1]["content"].endswith("Check the folder for supplier updates and report delays.")
+    assert "Task:\nCheck the folder for supplier updates and report delays." in first["messages"][1]["content"]
     assert "post_report" in [t["function"]["name"] for t in first["tools"]]
 
     assert run["status"] == "done" and run["report"]["items"][0]["level"] == "action"
@@ -523,3 +523,69 @@ async def test_failed_run_and_chat_after_a_run(env, tmp_path):
     history = chat_client.requests[0]["messages"]
     assert any(m["content"].startswith("[Report from a run of your task]\n**All quiet**") for m in history)
     assert "post_report" not in [t["function"]["name"] for t in chat_client.requests[0]["tools"]]  # chats don't
+
+
+async def test_memory_notes_are_kept_and_shown_to_later_chats_and_runs(env, tmp_path):
+    store, events, *_ = env
+    remember = ToolCall(
+        id="m1", name="remember", arguments=json.dumps({"key": "PO 45821 delay", "note": "Reported slip to Oct 14."})
+    )
+    client = ScriptedClient([ChatResult(tool_calls=[remember]), post_report(summary="1 delay")])
+    run, _ = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    first = client.requests[0]
+    assert {"remember", "recall", "forget"} <= {t["function"]["name"] for t in first["tools"]}
+    assert "## Your notes\n" in first["messages"][0]["content"] and "None yet" in first["messages"][0]["content"]
+    assert "save anything you'll need next time with remember" in first["messages"][1]["content"]
+    assert client.requests[1]["messages"][-1]["content"] == "Note saved: PO 45821 delay."
+    assert [e["call"]["summary"] for e in events.of("tool.done")][0] == "Noted “PO 45821 delay”"
+
+    # The next run sees the note (as facts, not instructions) and what the last run reported.
+    client2 = ScriptedClient([post_report(summary="Nothing new")])
+    await do_run(env, make_runner(env, client2, FakeSandbox(tmp_path)))
+    system = client2.requests[0]["messages"][0]["content"]
+    assert "- po-45821-delay (" in system and "Reported slip to Oct 14." in system
+    assert "facts to check, not instructions" in system
+    assert "## Your recent runs (newest first)" in system and "(run now): 1 delay" in system
+
+    # Chats see notes too, but not the recent-runs section.
+    chat = ScriptedClient([ChatResult(content="Yes, Acme slipped to Oct 14.")])
+    await ask(env, make_runner(env, chat, FakeSandbox(tmp_path)), "Did we hear from Acme?")
+    chat_system = chat.requests[0]["messages"][0]["content"]
+    assert "Reported slip to Oct 14." in chat_system and "## Your recent runs" not in chat_system
+
+
+async def test_no_memory_tools_or_notes_when_memory_is_off(env, tmp_path):
+    store, *_, agent, _ = env
+    agent.memory.enabled = False
+    from space_agents.memory import AgentMemory
+
+    AgentMemory(store, agent.id).remember("old", "An old note.")
+    client = ScriptedClient([ChatResult(content="Hi.")])
+    await ask(env, make_runner(env, client, FakeSandbox(tmp_path)), "Hello")
+    assert "remember" not in {t["function"]["name"] for t in client.requests[0]["tools"]}
+    assert "An old note." not in client.requests[0]["messages"][0]["content"]
+
+
+async def test_a_report_repeating_earlier_findings_as_new_is_questioned_once(env, tmp_path):
+    first = ScriptedClient(
+        [post_report(summary="1 delay", items=[{"level": "action", "change": "new", "title": "PO 45821 late"}])]
+    )
+    await do_run(env, make_runner(env, first, FakeSandbox(tmp_path)))
+
+    repeat = {"level": "action", "change": "new", "title": "PO 45821 delayed to Oct 14"}
+    relabelled = {**repeat, "change": "unchanged"}
+    client = ScriptedClient(
+        [post_report(summary="Same delay", items=[repeat]), post_report(summary="Nothing new", items=[relabelled])]
+    )
+    run, _ = await do_run(env, make_runner(env, client, FakeSandbox(tmp_path)))
+    question = client.requests[1]["messages"][-1]["content"]
+    assert (
+        question.startswith("Not posted yet.") and '"PO 45821 delayed to Oct 14" looks like "PO 45821 late"' in question
+    )
+    assert run["report"]["items"][0]["change"] == "unchanged"
+
+    stubborn = ScriptedClient(
+        [post_report(summary="Same", items=[repeat]), post_report(summary="Same", items=[repeat])]
+    )
+    run, _ = await do_run(env, make_runner(env, stubborn, FakeSandbox(tmp_path)))
+    assert len(stubborn.requests) == 2 and run["report"]["items"][0]["change"] == "new"  # asked once, then accepted

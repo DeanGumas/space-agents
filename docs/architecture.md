@@ -87,12 +87,29 @@ about.
    - **Waiting:** a run waiting for its turn stays `queued` and keeps its place in its agent's line.
 3. `AgentRunner.run` (`runtime/loop.py`) uses a fresh context: the system prompt with "This is a run, not a chat",
    then the task. `post_report` is among its tools.
+   - **The system prompt also holds** the agent's notes, if memory is on (see "Memory" below), and its last 5 run
+     reports.
+   - **The opening message asks it to** mark each finding new / changed / unchanged against those, and to save
+     notes before reporting.
 4. The run ends when the model calls `post_report` (`runtime/reports.py`):
    - **If it answers in text instead,** it gets one nudge with only `post_report` on offer. If that fails too, the
      text becomes the report.
    - **Saving:** the report is saved on the run, and its Markdown becomes the message content.
    - **UI:** `message.done` carries the run, so the UI renders a report card.
+   - **Repeat check:** if a finding marked `new` looks like one from a recent run (a shared reference number, or
+     mostly the same words), the first `post_report` is answered with a specific "is this really new?" question
+     instead of being accepted. The model's second submission is accepted as is.
 5. File changes follow the agent's `file_changes` policy, as in chat.
+
+**Memory (`memory.py`).** With the agent's memory on (the default), chats and runs get `remember(key, note)`,
+`recall(query)`, and `forget(key)`, backed by the `agent_memory` table.
+- **Replacing:** the same key replaces a note.
+- **In the prompt:** the newest notes (up to 40 / ~4k characters) go into the system prompt, labelled as the agent's
+  own earlier observations: facts to check, not instructions. They're model-written, so a poisoned document could
+  otherwise plant standing orders.
+- **For the user:** the bridge's `list_memory` / `delete_memory` / `clear_memory` back the notes list in the
+  editor's Advanced tab.
+- **Lifecycle:** deleting an agent deletes its notes; duplicating doesn't copy them.
 
 **Scheduling (`runtime/scheduler.py`).** `main.py` starts `Scheduler.run_forever()` on the core loop. It isn't
 started in `--smoke-test`/`--sandbox-selftest`. The first tick comes 15 s after launch, then one every 30 s.
@@ -146,15 +163,29 @@ changes.
 
 ## Approvals: Activity and desktop notifications
 
-- **The attention list** (`ChangeManager.attention()`) has one entry per agent that's waiting on the user: it has
-  `pending`/`conflicted` changes, or it's *revising* after "Discard & tell agent". It's sent in `bootstrap` and pushed
-  as `attention.updated` whenever a change's status or an agent's revising state changes.
-- **The Activity tab** renders one entry per agent with its change cards (Apply/Discard work right there). The
-  sidebar badge shows the number of entries and is hidden at 0.
-- **Desktop notification:** when a reply finishes (`Api._start_reply` → `finished`), if it left pending changes the
-  bridge calls `Notifier.notify("<agent> requests approval", approval_summary(changes))`. It's skipped when the window
-  is focused on that agent's conversation (reported by the UI via `set_ui_state`), or when the agent's
+- **The attention list** (`ChangeManager.attention()`) has one entry per agent that's waiting on the user:
+  - it has `pending`/`conflicted` changes
+  - it's *revising* after "Discard & tell agent"
+  - or it has **notable run reports the user hasn't seen** (merged in through `extra_attention` →
+    `notices.reports_needing_attention`).
+
+  It's sent in `bootstrap` and pushed as `attention.updated` whenever any of those change.
+- **Notable runs** (`runtime/notices.py`): the report has a new or changed finding at or above the agent's
+  `notifications.min_level`, or the run failed. Unchanged ("still open") findings never count.
+- **"Seen"** (`runs.seen_at`) is set when:
+  - the run finishes while the user is watching that agent
+  - the user opens the agent's conversation (`mark_reports_seen`, called by `selectAgent`; not by the automatic
+    first selection at launch, so reports that arrived while the app was closed aren't cleared unseen)
+  - or the user clicks Dismiss (`dismiss_report`).
+- **The Activity tab** renders one entry per agent: its report notices (summary, notable findings, Open, Dismiss)
+  and its change cards (Apply/Discard work right there). The sidebar badge shows the number of entries and is
+  hidden at 0.
+- **Desktop notifications:** after any reply or run (the work queue's `on_finished` → `Api._after_work`), skipped
+  when the window is focused on that agent's conversation (reported via `set_ui_state`) or the agent's
   `notifications.desktop` is off.
+  - **A notable run:** `notices.notification`, e.g. "PO Manager: action needed" / "PO 45821 slips to Oct 14 (+1
+    more) · 1 file change to approve", or "PO Manager: the run failed" plus the error.
+  - **Otherwise, if the reply left pending changes:** "<agent> requests approval" plus `approval_summary(changes)`.
 - **Delivery** (`platform/notify.py`): `osascript` on macOS, a PowerShell toast on Windows, `notify-send` on Linux. Text
   is passed as arguments/environment variables (no injection). Until the app is packaged, macOS lists these under
   "Script Editor" and Windows under "Windows PowerShell".
@@ -168,6 +199,8 @@ changes.
 | Chat | `list_messages` (with tool calls, changes, and runs), `send_message` (queued if busy), `stop_agent` (current + queued) |
 | Runs | `run_agent` (Run now); agent views include `next_run_at` |
 | Skills | `list_skills(folder)` (editor preview; only for picked folders or folders agents already use) |
+| Memory | `list_memory(agent_id)`, `delete_memory(agent_id, note_id)`, `clear_memory(agent_id)` |
+| Activity | `attention`, `mark_reports_seen(agent_id)`, `dismiss_report(run_id)` |
 | Activity | `attention` (also in `bootstrap`), `set_ui_state(focused, viewing)` (window focus + open conversation, for notifications) |
 | Changes | `apply_change`, `discard_change`, `undo_change`, `reveal_change` |
 | Sandbox | `sandbox_done` (called by `ui/js/sandbox.js` when the worker finishes a run) |
@@ -206,12 +239,13 @@ space_agents/
   store.py       agents/*.json, avatars/*.png, space.db schema/migrations + query helpers
   catalog.py     tool-server catalog (dev file for now) + agent templates
   skills.py      agent skills: find SKILL.md folders, parse their headers, what use_skill returns
+  memory.py      agent notes: remember / recall / forget, and which notes go in the prompt
   paths.py       resource dir (dev vs PyInstaller bundle), per-OS data/log dirs
   defaults.json  build-time defaults (org URLs get baked in here)
   server.py      WSGI app: UI files, sandbox worker CSP header, token-scoped workspace routes
   llm/client.py  OpenAI-compatible chat (streaming, tools, param-compat, retries)
   runtime/       loop.py (agent loop: chat + runs), dispatch.py (per-agent work queue + run cap),
-                 scheduler.py (slots, 30 s tick, catch-up), reports.py (post_report),
+                 scheduler.py (slots, 30 s tick, catch-up), reports.py (post_report), notices.py (report alerts),
                  compaction.py, prompts.py, dummy.py (no-model placeholder)
   tools/         registry.py (tool specs + execution), access.py (folder policy)
   documents/     extract.py (PDF/Office/text → pages), library.py (cache + FTS5 search)
@@ -244,7 +278,8 @@ scripts/update_csp.py        keep the CSP hash in sync with the import map
 | Table | Contents |
 |---|---|
 | `messages` | Chat history (+ token usage per agent reply); status `queued`/`streaming`/`done`/`error`; `run_id` for run reports |
-| `runs` | Runs of an agent's task: trigger (`manual`/`schedule`), status, task, report JSON, timestamps |
+| `runs` | Runs of an agent's task: trigger (`manual`/`schedule`), status, task, report JSON, timestamps, `seen_at` (for Activity) |
+| `agent_memory` | Agent notes: `agent_id`, unique `key`, `note`, the message that saved it, timestamps |
 | `schedule_state` | Per scheduled agent: `next_run_at`, `last_run_at`, its `jitter_seconds`, and the settings they were computed for |
 | `tool_calls` | Every tool call: name, arguments, summary, truncated result, status, duration (the audit trail) |
 | `changes` | Proposed changes and their status |

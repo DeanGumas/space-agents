@@ -16,7 +16,7 @@ export const theme = signal("system");
 export const dialog = signal(null); // {kind: "new"} | {kind: "editor", agentId?, draft} | {kind: "settings"}
 export const toasts = signal([]);
 export const attention = signal([]); // agents waiting on the user: [{agent_id, changes, revising, updated_at}]
-export const focusChange = signal(null); // change id to scroll to once its conversation is open
+export const focusTarget = signal(null); // element id to scroll to and flash once its conversation is open
 export const contextMenu = signal(null); // {x, y, title?, items: [{label, icon, onSelect} | {divider: true}]}
 
 // Sidebar width: draggable between SIDEBAR_MIN and SIDEBAR_MAX; narrower snaps to an icon-only rail.
@@ -74,6 +74,12 @@ export async function init() {
 export async function selectAgent(id) {
   view.value = { kind: "agent", id };
   if (unread.value[id]) unread.value = { ...unread.value, [id]: 0 };
+  // Opening a conversation counts as seeing its run reports (init's automatic first selection doesn't call this).
+  if (attention.value.some((e) => e.agent_id === id && e.reports?.length)) {
+    call("mark_reports_seen", id)
+      .then((list) => (attention.value = list))
+      .catch(toastError);
+  }
   if (!messages.value[id]) await loadMessages(id);
 }
 
@@ -244,8 +250,22 @@ export async function changeAction(action, change, force = false) {
 
 /** Open an agent's conversation and scroll to one of its change cards. */
 export async function openChange(agentId, changeId) {
-  focusChange.value = changeId;
+  focusTarget.value = changeId ? `change-${changeId}` : null;
   await selectAgent(agentId);
+}
+
+/** From Activity: open the conversation at a run's report. Viewing it marks it seen (it leaves Activity). */
+export async function openReport(agentId, messageId) {
+  focusTarget.value = `msg-${messageId}`;
+  await selectAgent(agentId);
+}
+
+export async function dismissReport(runId) {
+  try {
+    attention.value = await call("dismiss_report", runId);
+  } catch (e) {
+    toastError(e);
+  }
 }
 
 // Tell Python whether the window is in front and which conversation is open, so desktop notifications are skipped

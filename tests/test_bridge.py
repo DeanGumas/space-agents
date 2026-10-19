@@ -458,3 +458,75 @@ def test_skills_folder_must_come_from_the_picker(env, tmp_path):
     api._picked_folders.clear()
     ok(api.save_agent({**agent, "description": "edited"}))  # an agent's own folder needs no re-picking
     assert ok(api.list_skills(folder))["skills"]  # and can still be previewed
+
+
+def test_user_can_review_and_delete_an_agents_notes(env):
+    from space_agents.memory import AgentMemory
+
+    api, _ = env
+    agent = ok(api.save_agent({"name": "PO Bot"}))
+    m = AgentMemory(api._store, agent["id"])
+    m.remember("a", "First note.")
+    m.remember("b", "Second note.")
+    notes = ok(api.list_memory(agent["id"]))
+    assert [n["key"] for n in notes] == ["b", "a"]
+    assert ok(api.delete_memory(agent["id"], notes[0]["id"])) is True
+    assert ok(api.delete_memory("someone-else", notes[1]["id"])) is False  # notes are per agent
+    assert ok(api.clear_memory(agent["id"])) == 1 and ok(api.list_memory(agent["id"])) == []
+    assert api.list_memory("nobody")["ok"] is False
+    clone = ok(api.duplicate_agent(agent["id"]))
+    assert ok(api.list_memory(clone["id"])) == []  # duplicating copies the setup, not the memory
+
+
+def _finished_run(api, agent_id, items, status="done", content="**report**"):
+    from space_agents.store import now_iso
+
+    run = api._store.add_run(agent_id, "schedule", "Check the folder.")
+    report = {"summary": "1 delay", "items": items} if status == "done" else None
+    api._store.update_run(run["id"], status=status, report=report, finished_at=now_iso())
+    api._store.update_message(run["message_id"], content=content, status="done" if status == "done" else "error")
+    return run
+
+
+ACTION = {
+    "level": "action",
+    "change": "new",
+    "title": "PO 45821 late",
+    "detail": "",
+    "suggested_actions": [],
+    "sources": [],
+}
+
+
+def test_notable_run_reports_notify_and_wait_in_activity_until_seen(env):
+    api, delivered = env
+    agent = ok(api.save_agent({"name": "PO Agent", "task": "Check the folder."}))
+    run = _finished_run(api, agent["id"], [ACTION])
+    ok(api.set_ui_state(True, None))  # the window is in front, but showing another view
+    api._after_work(agent["id"], run["message_id"])
+    assert api._fake_notifier.sent == [("PO Agent: action needed", "PO 45821 late")]
+    [entry] = ok(api.attention())
+    assert entry["agent_id"] == agent["id"] and entry["reports"][0]["run_id"] == run["id"]
+    wait_until(lambda: any(e["type"] == "attention.updated" and e["attention"] for e in delivered))
+
+    ok(api.set_ui_state(True, agent["id"]))  # merely showing it (e.g. selected automatically at launch) isn't enough
+    assert len(ok(api.attention())) == 1
+    assert ok(api.mark_reports_seen(agent["id"])) == []  # the user opened the conversation
+
+
+def test_reports_seen_as_they_finish_or_dismissed_and_quiet_runs(env):
+    api, _ = env
+    agent = ok(api.save_agent({"name": "PO Agent", "task": "Check the folder."}))
+    ok(api.set_ui_state(True, agent["id"]))  # watching the agent when its run finishes
+    api._after_work(agent["id"], _finished_run(api, agent["id"], [ACTION])["message_id"])
+    assert api._fake_notifier.sent == [] and ok(api.attention()) == []
+
+    ok(api.set_ui_state(False, None))
+    quiet = _finished_run(api, agent["id"], [{**ACTION, "change": "unchanged"}])  # nothing new: no alert
+    api._after_work(agent["id"], quiet["message_id"])
+    failed = _finished_run(api, agent["id"], [], status="error", content="⚠️ The model server kept failing.")
+    api._after_work(agent["id"], failed["message_id"])
+    assert api._fake_notifier.sent == [("PO Agent: the run failed", "The model server kept failing.")]
+    [entry] = ok(api.attention())
+    assert [r["status"] for r in entry["reports"]] == ["error"]
+    assert ok(api.dismiss_report(failed["id"])) == []

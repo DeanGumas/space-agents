@@ -20,7 +20,8 @@ from space_agents.changes import ChangeManager
 from space_agents.documents.extract import UnsupportedDocument
 from space_agents.documents.library import DocumentLibrary
 from space_agents.manifest import Manifest
-from space_agents.runtime.reports import POST_REPORT_SPEC, parse_report
+from space_agents.memory import MEMORY_TOOL_SPECS, AgentMemory, format_notes
+from space_agents.runtime.reports import POST_REPORT_SPEC, parse_report, possible_repeats, repeats_question
 from space_agents.sandbox.pyodide import PyodideSandbox, RunResult, SandboxUnavailable
 from space_agents.skills import SkillSet, use_skill_result
 from space_agents.tools.access import AccessDenied, FolderAccess, display_path
@@ -221,10 +222,16 @@ class ToolBox:
         extra_file_types: list[str] = (),
         skills: SkillSet | None = None,
         run: bool = False,
+        memory: AgentMemory | None = None,
+        recent_runs: list[dict[str, Any]] | None = None,
     ):
         self.agent = agent
+        self.memory = memory  # the agent's notes; None when its memory is off
         self.run = run  # a run (Run now / scheduled) rather than a chat: offers post_report
         self.report: dict[str, Any] | None = None  # set when the model calls post_report
+        self.recent_runs = recent_runs or []  # for the one-time "is this really new?" check on post_report
+        self.repeats_checked = False
+        self.final_round = False  # set by the loop: no chance to resubmit, so post_report is accepted as is
         self.message_id = message_id
         self.docs = docs
         self.sandbox = sandbox
@@ -237,6 +244,8 @@ class ToolBox:
         specs = list(TOOL_SPECS)
         if self.skills.skills:
             specs.append(USE_SKILL_SPEC)
+        if self.memory:
+            specs += MEMORY_TOOL_SPECS
         if self.run:
             specs.append(POST_REPORT_SPEC)
         return specs
@@ -253,8 +262,16 @@ class ToolBox:
                 return await self._run_python(args, tool_call_id)
             if name == "use_skill" and self.skills.skills:
                 return self._use_skill(str(args.get("name") or ""))
+            if name in ("remember", "recall", "forget") and self.memory:
+                return self._memory_tool(name, args)
             if name == "post_report" and self.run:
-                self.report = parse_report(args)
+                report = parse_report(args)
+                repeats = possible_repeats(report, self.recent_runs)
+                if repeats and not self.repeats_checked and not self.final_round:
+                    # Small models label repeats as new; asking once, specifically, works better than the prompt.
+                    self.repeats_checked = True
+                    return ToolOutcome(repeats_question(repeats), "Checked the report against earlier runs")
+                self.report = report
                 return ToolOutcome("Report posted. The run is complete.", "Posted the report")
             return ToolOutcome(f"Unknown tool {name!r}.", f"Unknown tool {name}", ok=False)
         except (AccessDenied, UnsupportedDocument, FileNotFoundError, SandboxUnavailable, ValueError) as e:
@@ -302,6 +319,20 @@ class ToolBox:
     async def _search(self, raw: str, query: str) -> ToolOutcome:
         path = self.access.resolve(raw)
         return ToolOutcome(await self.docs.search(path, path.name, query), f"Searched {path.name} for “{query}”")
+
+    def _memory_tool(self, name: str, args: dict[str, Any]) -> ToolOutcome:
+        key = str(args.get("key") or "").strip()
+        if name == "remember":
+            status = self.memory.remember(key, str(args.get("note") or ""), self.message_id)
+            return ToolOutcome(f"Note {status}: {key}.", f"Noted “{key}”")
+        if name == "forget":
+            if self.memory.forget(key):
+                return ToolOutcome(f"Forgot the note {key}.", f"Forgot “{key}”")
+            return ToolOutcome(f"There's no note with the key {key!r}.", f"Forget “{key}”", ok=False)
+        query = str(args.get("query") or "")
+        found = self.memory.recall(query)
+        result = format_notes(found) if found else "No notes match. (Your notes are listed in your instructions.)"
+        return ToolOutcome(result, f"Looked through its notes for “{query}”")
 
     def _use_skill(self, name: str) -> ToolOutcome:
         skill = self.skills.get(name)
@@ -540,5 +571,8 @@ def _failed_summary(name: str, args: dict[str, Any]) -> str:
         "run_python": "Run",
         "use_skill": "Use skill",
         "post_report": "Post the report",
+        "remember": "Save a note",
+        "recall": "Search notes",
+        "forget": "Forget a note",
     }
     return f"{label.get(name, name)} {Path(str(target)).name if 'path' in args else target}".strip()

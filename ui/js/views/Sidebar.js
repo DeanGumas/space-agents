@@ -50,7 +50,7 @@ export function Sidebar() {
           <${Icon} name="inbox" />
           <span class="label">Activity</span>
           ${attention.value.length > 0 &&
-          html`<span class="badge" title=${`${attention.value.length} waiting for your approval`}>
+          html`<span class="badge" title=${`${attention.value.length} agent${attention.value.length === 1 ? "" : "s"} waiting on you`}>
             ${attention.value.length}
           </span>`}
         </button>

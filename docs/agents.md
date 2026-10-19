@@ -20,7 +20,7 @@ The schema is in `space_agents/manifest.py` (dataclasses) and PLAN.md §3.1.
 | `schedule`, `task` | When to run and what to do each run (task required if the schedule is on). With the schedule on, it runs at fixed times on the chosen days within the active hours (e.g. 07:03, 08:03, …: every N minutes from the start time, plus the agent's own random offset of up to ±5 minutes, see `schedule_jitter_minutes`) while the app is open; a missed run catches up once if "Catch up after a missed run" is on. **Run now** in the channel header runs the task immediately. Either way the result is a report card (architecture.md) | Schedule |
 | `notifications` | `desktop`: pop up when the agent needs approval (and, later, when a scheduled run finds something); `min_level` for runs (`info` / `action` / `urgent`) | Schedule |
 | `compaction` | `enabled`, `trigger_tokens` (8k–2M, default 100k), `summary_tokens` (200–20k, default 2k, at most a quarter of the trigger): summarize earlier work when a run gets long (architecture.md) | Model → Long tasks |
-| `memory`, `limits` | Notes between runs; per-run tool-call and time caps | Advanced |
+| `memory`, `limits` | `memory.enabled` (default on): the agent keeps short notes between runs and chats (`remember`/`recall`/`forget`). You can see and delete them in Advanced, and they're framed to the agent as facts, not instructions. `limits`: per-run tool-call and time caps | Advanced |
 | `permissions.external_actions` | Reserved; always `never` in v1 | Advanced (disabled) |
 
 **Validation** (`Manifest.from_dict`) collects *all* problems keyed by dotted path (`schedule.active_hours.end`,

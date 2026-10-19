@@ -5,7 +5,7 @@ import { useState, useRef, useLayoutEffect, useEffect } from "preact/hooks";
 import { Avatar, Icon } from "../components/common.js";
 import { ActivitySteps, ChangeCards } from "../components/Activity.js";
 import { RunReport } from "../components/Report.js";
-import { messages, sendMessage, stopAgent, runAgent, openEditor, toastError, boot, focusChange } from "../state.js";
+import { messages, sendMessage, stopAgent, runAgent, openEditor, toastError, boot, focusTarget } from "../state.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { cx, formatTime, formatDay, isSameDay, nextRunLabel, scheduleSummary } from "../lib/util.js";
 import { toDraft } from "./AgentEditor.js";
@@ -83,18 +83,18 @@ function Timeline({ agent, list, onEdit }) {
     stick.current = true;
   }, [agent.id]);
 
-  // Opened from Activity: scroll to the change card and flash it, instead of pinning to the bottom.
+  // Opened from Activity: scroll to the change card or report and flash it, instead of pinning to the bottom.
   useEffect(() => {
-    const id = focusChange.value;
+    const id = focusTarget.value;
     if (!id || list === undefined) return;
-    const el = document.getElementById(`change-${id}`);
-    focusChange.value = null;
+    const el = document.getElementById(id);
+    focusTarget.value = null;
     if (!el) return;
     stick.current = false;
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1600);
-  }, [focusChange.value, list]);
+  }, [focusTarget.value, list]);
 
   return html`
     <div class="timeline" ref=${ref} onScroll=${onScroll}>
@@ -166,7 +166,7 @@ function Message({ msg, agent, first }) {
       ${msg.status === "error" && html`<div class="typing">(Interrupted)</div>`}`;
   }
   return html`
-    <div class=${cx("msg", first && "first", msg.status === "error" && !msg.content && "error")}>
+    <div id=${`msg-${msg.id}`} class=${cx("msg", first && "first", msg.status === "error" && !msg.content && "error")}>
       <div class="gutter">
         ${first
           ? isUser

@@ -15,6 +15,9 @@ import re
 from typing import Any
 
 LEVELS = ("info", "action", "urgent")
+# Compared with the agent's recent runs. Small models are better at labelling repeats than at leaving them out, so
+# repeats are kept but marked: the card shows unchanged items as "still open", and notifications skip them.
+CHANGES = ("new", "changed", "unchanged")
 LEVEL_LABELS = {"info": "Info", "action": "Action needed", "urgent": "Urgent"}
 MAX_ITEMS = 20
 
@@ -43,6 +46,14 @@ POST_REPORT_SPEC: dict[str, Any] = {
                                 "enum": list(LEVELS),
                                 "description": "info: FYI. action: the user should do something. urgent: today.",
                             },
+                            "change": {
+                                "type": "string",
+                                "enum": list(CHANGES),
+                                "description": (
+                                    "Compared with your recent runs: new (not reported before), changed (reported, "
+                                    "but something is different now), or unchanged (already reported, still open)."
+                                ),
+                            },
                             "title": {"type": "string"},
                             "detail": {"type": "string"},
                             "suggested_actions": {"type": "array", "items": {"type": "string"}},
@@ -52,7 +63,7 @@ POST_REPORT_SPEC: dict[str, Any] = {
                                 "description": "File names (with pages) the finding comes from.",
                             },
                         },
-                        "required": ["level", "title"],
+                        "required": ["level", "change", "title"],
                     },
                 },
             },
@@ -89,6 +100,9 @@ def parse_report(args: dict[str, Any]) -> dict[str, Any]:
         level = str(raw.get("level") or "info").lower()
         if level not in LEVELS:
             raise ValueError(f"items[{i}].level must be one of: {', '.join(LEVELS)}.")
+        change = str(raw.get("change") or "new").lower()
+        if change not in CHANGES:
+            raise ValueError(f"items[{i}].change must be one of: {', '.join(CHANGES)}.")
         title = _text(raw.get("title"), 200)
         if not title:
             raise ValueError(f"items[{i}] needs a title.")
@@ -96,6 +110,7 @@ def parse_report(args: dict[str, Any]) -> dict[str, Any]:
         items.append(
             {
                 "level": level,
+                "change": change,
                 "title": title,
                 "detail": detail,
                 "suggested_actions": _strings(raw.get("suggested_actions"), 5, 200),
@@ -112,14 +127,23 @@ def fallback_report(text: str) -> dict[str, Any]:
     first = re.sub(r"^(summary|report)\s*:\s*", "", first, flags=re.IGNORECASE)
     sentence = re.split(r"(?<=[.!?])\s", first, maxsplit=1)[0]  # the first sentence makes a better headline
     summary = (sentence if len(sentence) <= 200 else sentence[:197].rstrip() + "…") or "The run finished."
-    items = [{"level": "info", "title": summary[:200], "detail": text, "suggested_actions": [], "sources": []}]
+    item = {
+        "level": "info",
+        "change": "new",
+        "title": summary[:200],
+        "detail": text,
+        "suggested_actions": [],
+        "sources": [],
+    }
+    items = [item]
     return {"summary": summary, "items": items if text else []}
 
 
 def report_markdown(report: dict[str, Any]) -> str:
     lines = [f"**{report['summary']}**"]
     for item in report["items"]:
-        lines.append(f"\n**{LEVEL_LABELS[item['level']]}: {item['title']}**")
+        note = {"changed": " (changed)", "unchanged": " (still open, reported before)"}.get(item.get("change"), "")
+        lines.append(f"\n**{LEVEL_LABELS[item['level']]}: {item['title']}**{note}")
         if item["detail"]:
             lines.append(item["detail"])
         lines += [f"- Suggested: {a}" for a in item["suggested_actions"]]
@@ -130,7 +154,57 @@ def report_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def top_level(report: dict[str, Any] | None) -> str | None:
-    """The most serious level in a report (for notifications and badges), or None if it has no items."""
-    levels = [item["level"] for item in (report or {}).get("items", [])]
+def fresh_items(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Findings that are new or changed since the agent's recent runs (what's worth a notification)."""
+    return [item for item in (report or {}).get("items", []) if item.get("change", "new") != "unchanged"]
+
+
+def top_level(report: dict[str, Any] | None, fresh_only: bool = False) -> str | None:
+    """The most serious level in a report (for notifications and badges), or None if it has no (fresh) items."""
+    items = fresh_items(report) if fresh_only else (report or {}).get("items", [])
+    levels = [item["level"] for item in items]
     return max(levels, key=LEVELS.index) if levels else None
+
+
+def _ids(text: str) -> set[str]:
+    """Reference numbers (PO, invoice, ticket…): 4+ digits, not years."""
+    return {n for n in re.findall(r"\d{4,}", text) if not (len(n) == 4 and n[:2] in ("19", "20"))}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2}
+
+
+def looks_like(title: str, earlier: str) -> bool:
+    """Same reference number, or mostly the same words."""
+    if _ids(title) & _ids(earlier):
+        return True
+    a, b = _words(title), _words(earlier)
+    return bool(a and b) and len(a & b) / len(a | b) >= 0.6
+
+
+def possible_repeats(report: dict[str, Any], recent_runs: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Findings marked new that look like ones from recent runs: (title, earlier title, when it was reported)."""
+    earlier = [
+        (item["title"], (run["finished_at"] or run["created_at"])[:16].replace("T", " "))
+        for run in recent_runs
+        for item in run["report"]["items"]
+    ]
+    repeats = []
+    for item in report["items"]:
+        if item["change"] != "new":
+            continue
+        match = next(((title, when) for title, when in earlier if looks_like(item["title"], title)), None)
+        if match:
+            repeats.append((item["title"], *match))
+    return repeats
+
+
+def repeats_question(repeats: list[tuple[str, str, str]]) -> str:
+    lines = [f'- "{title}" looks like "{earlier}" (reported {when} UTC)' for title, earlier, when in repeats]
+    return (
+        "Not posted yet. These findings are marked new, but look like ones you already reported:\n"
+        + "\n".join(lines)
+        + "\nFor each one, set change to unchanged if nothing is different, or changed if something is (say what "
+        "in the detail). If it really is new, keep it. Then call post_report again."
+    )

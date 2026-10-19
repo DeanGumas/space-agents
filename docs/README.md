@@ -26,6 +26,8 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - compaction of long runs ([architecture.md](architecture.md))
   - **Run now** with report cards, and a work queue per agent ([architecture.md](architecture.md))
   - scheduled runs: slots with jitter, catch-up after sleep, and a global run cap
+  - memory: agent notes between runs and chats, and new / changed / still-open findings
+  - report notifications and run reports in Activity
 
   See [documents-and-sandbox.md](documents-and-sandbox.md).
 - **Security hardening:**
@@ -36,7 +38,7 @@ How the pieces fit together. [PLAN.md](../PLAN.md) has the *why* and the roadmap
   - MCP/OpenAPI servers
   - attachments (drag-and-drop)
   - onboarding and keychain
-  - memory between runs, report notifications, and background running (Phase 3 steps c–e)
+  - background running: close-to-background, single instance, start at login (Phase 3 step e)
   - rooms (group chats; designed in PLAN.md §3.5)
   - the "Allow writing to this folder?" permission card
 

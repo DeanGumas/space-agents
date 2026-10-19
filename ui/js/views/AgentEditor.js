@@ -11,7 +11,7 @@ import { Avatar, Field, Icon, Modal, Notice, SwitchRow } from "../components/com
 import { AvatarPicker } from "../components/AvatarPicker.js";
 import { boot, closeDialog, saveAgent, deleteAgent, selectAgent, toast, toastError } from "../state.js";
 import { call } from "../api.js";
-import { clone, cx, setPath } from "../lib/util.js";
+import { clone, cx, formatDay, setPath } from "../lib/util.js";
 
 const TABS = [
   { id: "general", label: "General", icon: "id-card", owns: ["name", "description", "avatar"] },
@@ -675,6 +675,66 @@ function ScheduleTab({ draft, set, err }) {
   `;
 }
 
+// The notes the agent keeps (memory.py). Agents write them, so they're shown as plain text, never as Markdown.
+function MemoryNotes({ agentId, enabled }) {
+  const [notes, setNotes] = useState(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => {
+    if (!agentId) return;
+    call("list_memory", agentId).then(setNotes).catch(toastError);
+  }, [agentId]);
+  if (!agentId) return null;
+  const remove = async (note) => {
+    try {
+      await call("delete_memory", agentId, note.id);
+      setNotes(notes.filter((n) => n.id !== note.id));
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  const clearAll = async () => {
+    try {
+      await call("clear_memory", agentId);
+      setNotes([]);
+      setConfirmClear(false);
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  if (notes === null) return null;
+  return html`
+    <div class="field">
+      <div class="label">
+        Notes it's keeping (${notes.length})${!enabled && notes.length > 0 && " · not used while memory is off"}
+      </div>
+      ${notes.length === 0
+        ? html`<div class="empty-box">No notes yet.</div>`
+        : html`<div class="card-list memory-notes">
+            ${notes.map(
+              (n) => html`<div class="card">
+                <div class="note-head">
+                  <code>${n.key}</code>
+                  <span class="date">${formatDay(n.updated_at)}</span>
+                  <button class="btn ghost icon-only sm" title="Delete this note" onClick=${() => remove(n)}>
+                    <${Icon} name="x" />
+                  </button>
+                </div>
+                <div class="note">${n.note}</div>
+              </div>`,
+            )}
+          </div>
+          <div style=${{ marginTop: "8px" }}>
+            ${confirmClear
+              ? html`<button class="btn danger confirm sm" onClick=${clearAll}>Yes, delete all notes</button>
+                  <button class="btn sm" onClick=${() => setConfirmClear(false)}>Cancel</button>`
+              : html`<button class="btn sm" onClick=${() => setConfirmClear(true)}>
+                  <${Icon} name="trash-2" size="sm" /> Delete all notes
+                </button>`}
+          </div>`}
+    </div>
+  `;
+}
+
 function AdvancedTab({ draft, set, err, agentId }) {
   const [confirming, setConfirming] = useState(false);
   const json = JSON.stringify(toPayload(draft), (k, v) => (k === "image_data" ? "<image>" : v), 2);
@@ -714,10 +774,11 @@ function AdvancedTab({ draft, set, err, agentId }) {
     </div>
     <${SwitchRow}
       title="Memory"
-      help="Let the agent keep short notes between runs (e.g. what it already told you about)."
+      help="Let the agent keep short notes between runs and chats (e.g. what it already told you about)."
       on=${draft.memory.enabled}
       onChange=${(v) => set("memory.enabled", v)}
     />
+    <${MemoryNotes} agentId=${agentId} enabled=${draft.memory.enabled} />
     <${Field} label="Actions outside this computer" help="Sending email, posting to Teams, updating records, etc.">
       <select class="input" disabled value="never">
         <option value="never">Never (read-only in this version)</option>

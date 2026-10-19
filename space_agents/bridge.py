@@ -33,8 +33,10 @@ from space_agents.changes import ChangeError, ChangeManager
 from space_agents.config import Config
 from space_agents.core import Core, EventBus
 from space_agents.manifest import Manifest, ManifestError
+from space_agents.memory import AgentMemory
 from space_agents.platform.appearance import open_in_file_manager
 from space_agents.platform.notify import Notifier
+from space_agents.runtime import notices
 from space_agents.runtime.dispatch import Dispatcher
 from space_agents.runtime.loop import AgentRunner
 from space_agents.runtime.scheduler import Scheduler
@@ -173,6 +175,7 @@ class Api:
         # One work queue per agent (chat replies and runs); the bridge only starts and stops work.
         self._dispatch = dispatcher or Dispatcher(store=store, core=core, events=events, runner=runner, changes=changes)
         self._dispatch.on_finished = self._after_work
+        self._changes.extra_attention = lambda: notices.reports_needing_attention(self._store)
         self._scheduler = scheduler  # only for showing each agent's next run; it runs on the core loop
 
     def _attach_window(self, window: webview.Window) -> None:
@@ -348,6 +351,21 @@ class Api:
         self._store.delete_agent(agent_id)
         self._changes.emit_attention()  # its pending proposals are gone
 
+    # --- memory (notes agents keep between runs; the user can review and delete them) ----------------------------
+
+    @endpoint
+    def list_memory(self, agent_id: str) -> list[dict[str, Any]]:
+        self._store.get_agent(agent_id)  # NotFound for unknown agents
+        return AgentMemory(self._store, agent_id).notes()
+
+    @endpoint
+    def delete_memory(self, agent_id: str, note_id: int) -> bool:
+        return AgentMemory(self._store, agent_id).delete(int(note_id))
+
+    @endpoint
+    def clear_memory(self, agent_id: str) -> int:
+        return AgentMemory(self._store, agent_id).clear()
+
     # --- chat ---------------------------------------------------------------------------------------------------
 
     @endpoint
@@ -381,11 +399,31 @@ class Api:
         return {"message": self._dispatch.run(agent, "manual")}
 
     def _after_work(self, agent_id: str, message_id: int) -> None:
+        """After any reply or run: notify about a notable report, or else about changes awaiting approval."""
         try:
             agent = self._store.get_agent(agent_id)
         except NotFound:
             return
-        self._notify_if_awaiting_approval(agent, message_id)
+        message = self._store.get_message(message_id)
+        if not message["run_id"]:
+            self._notify_if_awaiting_approval(agent, message_id)
+            return
+        run = self._store.get_run(message["run_id"])
+        if self._ui_focused and self._ui_viewing == agent.id:
+            self._store.mark_runs_seen(agent.id, run["id"])  # it finished right in front of the user
+        elif notices.is_notable(agent, run):
+            if agent.notifications.desktop:
+                pending = len(self._pending_changes(message_id))
+                title, body = notices.notification(agent, run, message["content"], pending)
+                sent = self._notifier.notify(title, body)
+                log.info("Desktop notification %s: %s | %s", "sent" if sent else "unavailable", title, body)
+        else:
+            self._notify_if_awaiting_approval(agent, message_id)
+        self._changes.emit_attention()  # a notable report joins Activity
+
+    def _pending_changes(self, message_id: int) -> list[dict[str, Any]]:
+        changes = self._changes.for_messages([message_id]).get(message_id, [])
+        return [c for c in changes if c["status"] in ("pending", "conflicted")]
 
     def _notify_if_awaiting_approval(self, agent: Manifest, message_id: int) -> None:
         """After a reply: if it left changes for the user to approve, pop up a desktop notification.
@@ -393,11 +431,7 @@ class Api:
         Skipped when the user is already looking at that agent's conversation (the card is right in front of them)
         or when the agent's desktop notifications are turned off.
         """
-        pending = [
-            c
-            for c in self._changes.for_messages([message_id]).get(message_id, [])
-            if c["status"] in ("pending", "conflicted")
-        ]
+        pending = self._pending_changes(message_id)
         if not pending or not agent.notifications.desktop:
             return
         if self._ui_focused and self._ui_viewing == agent.id:
@@ -411,6 +445,22 @@ class Api:
         """The UI reports whether the window is in front and which agent's conversation is open."""
         self._ui_focused = bool(focused)
         self._ui_viewing = viewing if isinstance(viewing, str) else None
+
+    @endpoint
+    def mark_reports_seen(self, agent_id: str) -> list[dict[str, Any]]:
+        """The user opened the agent's conversation: its run reports leave Activity. (Not the automatic selection of
+        the first agent at launch, so reports that arrived while the app was closed aren't cleared unseen.)"""
+        if self._store.mark_runs_seen(str(agent_id)):
+            self._changes.emit_attention()
+        return self._changes.attention()
+
+    @endpoint
+    def dismiss_report(self, run_id: int) -> list[dict[str, Any]]:
+        """Remove a run report from Activity without opening the conversation. Returns the new attention list."""
+        run = self._store.get_run(int(run_id))
+        self._store.mark_runs_seen(run["agent_id"], run["id"])
+        self._changes.emit_attention()
+        return self._changes.attention()
 
     @endpoint
     def attention(self) -> list[dict[str, Any]]:
